@@ -1,0 +1,4 @@
+all:
+  hosts:
+    web_server:
+      ansible_host: ionos

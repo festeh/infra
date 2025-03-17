@@ -1,0 +1,5 @@
+---
+- name: Update system and manage all services
+  hosts: web_server
+  roles:
+    - role: common
