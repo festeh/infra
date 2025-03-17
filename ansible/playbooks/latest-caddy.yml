@@ -38,3 +38,8 @@
         name: caddy
         state: started
         enabled: yes
+
+    - name: Check Caddy version
+      command: caddy version
+      register: caddy_version_output
+      changed_when: false

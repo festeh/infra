@@ -1,0 +1,27 @@
+---
+- name: Update Caddy Configuration
+  hosts: all
+  become: true
+
+  tasks:
+  - name: Create log directory
+    file:
+      path: /var/log/caddy
+      state: directory
+      mode: '0755'
+      owner: caddy
+      group: caddy
+
+  - name: Update Caddy configuration
+    template:
+      src: ../templates/Caddyfile.j2
+      dest: /etc/caddy/Caddyfile
+      owner: root
+      group: root
+    notify: Reload Caddy
+
+  handlers:
+  - name: Reload Caddy
+    systemd:
+      name: caddy
+      state: reloaded
