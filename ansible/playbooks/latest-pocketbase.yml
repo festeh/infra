@@ -1,0 +1,62 @@
+---
+- name: Install and Configure PocketBase
+  hosts: all
+  become: true
+  vars:
+    pocketbase_version: "0.25.4"
+    pocketbase_user: "pocketbase"
+    pocketbase_dir: "/opt/pocketbase"
+    pocketbase_data_dir: "/var/lib/pocketbase"
+
+  tasks:
+    - name: Create PocketBase user
+      user:
+        name: "{{ pocketbase_user }}"
+        system: yes
+        create_home: no
+    - name: Create PocketBase directories
+      loop:
+        - "{{ pocketbase_dir }}"
+        - "{{ pocketbase_data_dir }}"
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ pocketbase_user }}"
+        group: "{{ pocketbase_user }}"
+        mode: '0755'
+
+    - name: Download the latest PocketBase release
+      become_user: pocketbase
+      get_url:
+        url: "https://github.com/pocketbase/pocketbase/releases/download/v{{ pocketbase_version }}/pocketbase_{{ pocketbase_version }}_linux_amd64.zip"
+        dest: "{{ pocketbase_dir }}"
+
+    - name: Extract PocketBase binary
+      become_user: pocketbase
+      unarchive:
+        src: "{{ pocketbase_dir }}/pocketbase_{{ pocketbase_version }}_linux_amd64.zip"
+        dest: "{{ pocketbase_dir }}"
+        remote_src: yes
+
+    - name: Update Pocketbase
+      become_user: pocketbase
+      shell: |
+        cd {{ pocketbase_dir }}
+        ./pocketbase update
+
+    - name: Deploy systemd service file for PocketBase
+      template:
+        src: ../templates/Pocketbase.j2
+        dest: "/etc/systemd/system/pocketbase.service"
+      notify:
+        - Reload systemd
+        - Reload pocketbase
+
+  handlers:
+    - name: Reload systemd
+      systemd:
+        daemon_reload: yes
+    - name: Reload pocketbase
+      systemd:
+        name: pocketbase
+        state: reloaded
