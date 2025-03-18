@@ -5,7 +5,7 @@ After=network-online.target
 [Service]
 User={{ pocketbase_user }}
 WorkingDirectory={{ pocketbase_dir }}
-ExecStart={{ pocketbase_dir }}/pocketbase serve --dir {{ pocketbase_data_dir }} --http=0.0.0.0:5003
+ExecStart={{ pocketbase_dir }}/pocketbase serve --http=0.0.0.0:5003
 Restart=always
 RestartSec=5
 
