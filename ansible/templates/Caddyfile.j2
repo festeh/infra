@@ -8,7 +8,7 @@
 etobaza.dimalip.in {
     reverse_proxy http://127.0.0.1:5003 {
       transport http {
-            read_timeout 360s
+        read_timeout 360s
       }
     }
     log
@@ -24,6 +24,10 @@ todo.dimalip.in {
 
 dimaist.dimalip.in {
     reverse_proxy localhost:3000
+}
+
+silence.dimalip.in {
+    reverse_proxy localhost:4000
 }
 
 papujki.space {
