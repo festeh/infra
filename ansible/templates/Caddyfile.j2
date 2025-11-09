@@ -35,5 +35,15 @@ papujki.space {
 }
 
 life.dimalip.in {
-    reverse_proxy localhost:7777
+    root * /opt/life/frontend/dist
+
+    # Proxy API requests to backend
+    handle /api/* {
+        reverse_proxy localhost:7777
+    }
+
+    # Serve static files and SPA
+    encode gzip
+    try_files {path} /index.html
+    file_server
 }
