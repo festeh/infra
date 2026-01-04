@@ -1,0 +1,27 @@
+# Miniflux Configuration
+# See https://miniflux.app/docs/configuration.html
+
+# Database
+DATABASE_URL=postgres://{{ miniflux_db_user }}:{{ miniflux_db_password }}@localhost/{{ miniflux_db_name }}?sslmode=disable
+
+# Server
+LISTEN_ADDR=127.0.0.1:{{ miniflux_port }}
+BASE_URL=https://{{ miniflux_domain }}/
+
+# Auto-migration and admin creation (safe to leave enabled)
+RUN_MIGRATIONS=1
+CREATE_ADMIN=1
+ADMIN_USERNAME={{ miniflux_admin_username }}
+ADMIN_PASSWORD={{ miniflux_admin_password }}
+
+# Logging
+LOG_LEVEL=info
+
+# Polling
+POLLING_FREQUENCY=60
+WORKER_POOL_SIZE=10
+
+# Cleanup - keep articles forever
+CLEANUP_FREQUENCY_HOURS=24
+CLEANUP_ARCHIVE_READ_DAYS=-1
+CLEANUP_ARCHIVE_UNREAD_DAYS=-1

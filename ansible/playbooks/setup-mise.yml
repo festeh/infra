@@ -1,0 +1,40 @@
+- name: Setup mise and Node.js
+  hosts: web_server
+  become: yes
+  tasks:
+    - name: Install required libraries
+      apt:
+        name:
+          - libatomic1
+        state: present
+        update_cache: yes
+
+    - name: Install mise
+      shell: curl https://mise.run | sh
+      args:
+        creates: /root/.local/bin/mise
+
+    - name: Add mise shims to system PATH
+      lineinfile:
+        path: /etc/environment
+        regexp: '^PATH='
+        line: 'PATH="/root/.local/share/mise/shims:/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"'
+
+    - name: Install Node.js 25 with mise
+      shell: /root/.local/bin/mise use -g node@25
+      register: mise_result
+      changed_when: "'install' in mise_result.stderr"
+
+    - name: Verify node works via shim
+      command: /root/.local/share/mise/shims/node --version
+      register: node_ver
+      changed_when: false
+
+    - name: Verify npm works via shim
+      command: /root/.local/share/mise/shims/npm --version
+      register: npm_ver
+      changed_when: false
+
+    - name: Show versions
+      debug:
+        msg: "Node.js: {{ node_ver.stdout }}, npm: {{ npm_ver.stdout }}"

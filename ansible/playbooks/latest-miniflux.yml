@@ -1,0 +1,138 @@
+---
+# Usage:
+#   export MINIFLUX_DB_PASSWORD=your_db_password
+#   export MINIFLUX_ADMIN_PASSWORD=your_admin_password
+#   ansible-playbook playbooks/latest-miniflux.yml
+
+- name: Install and Configure Miniflux
+  hosts: all
+  become: true
+  vars:
+    miniflux_user: "miniflux"
+    miniflux_port: "8085"
+    miniflux_domain: "rss.dimalip.in"
+    miniflux_db_name: "miniflux"
+    miniflux_db_user: "miniflux"
+    # Credentials from environment variables
+    miniflux_db_password: "{{ lookup('env', 'MINIFLUX_DB_PASSWORD') }}"
+    miniflux_admin_username: "admin"
+    miniflux_admin_password: "{{ lookup('env', 'MINIFLUX_ADMIN_PASSWORD') }}"
+
+  pre_tasks:
+    - name: Validate required environment variables
+      assert:
+        that:
+          - miniflux_db_password | length > 0
+          - miniflux_admin_password | length > 0
+        fail_msg: |
+          Missing required environment variables!
+          Please set:
+            export MINIFLUX_DB_PASSWORD=your_db_password
+            export MINIFLUX_ADMIN_PASSWORD=your_admin_password
+
+  tasks:
+    # --- PostgreSQL Setup ---
+    - name: Install PostgreSQL
+      apt:
+        name:
+          - postgresql
+          - postgresql-contrib
+          - python3-psycopg2
+        state: present
+        update_cache: yes
+
+    - name: Ensure PostgreSQL is running
+      systemd:
+        name: postgresql
+        state: started
+        enabled: yes
+
+    - name: Create Miniflux database user
+      become_user: postgres
+      postgresql_user:
+        name: "{{ miniflux_db_user }}"
+        password: "{{ miniflux_db_password }}"
+        state: present
+      no_log: true
+
+    - name: Create Miniflux database
+      become_user: postgres
+      postgresql_db:
+        name: "{{ miniflux_db_name }}"
+        owner: "{{ miniflux_db_user }}"
+        state: present
+
+    - name: Grant hstore extension privilege
+      become_user: postgres
+      postgresql_ext:
+        name: hstore
+        db: "{{ miniflux_db_name }}"
+        state: present
+
+    # --- Miniflux Installation ---
+    - name: Create Miniflux system user
+      user:
+        name: "{{ miniflux_user }}"
+        system: yes
+        create_home: no
+        shell: /usr/sbin/nologin
+
+    - name: Get latest Miniflux version
+      uri:
+        url: https://api.github.com/repos/miniflux/v2/releases/latest
+        return_content: yes
+      register: miniflux_release
+      delegate_to: localhost
+      become: no
+
+    - name: Set Miniflux version fact
+      set_fact:
+        miniflux_version: "{{ miniflux_release.json.tag_name }}"
+
+    - name: Download Miniflux binary
+      get_url:
+        url: "https://github.com/miniflux/v2/releases/download/{{ miniflux_version }}/miniflux-linux-amd64"
+        dest: "/usr/local/bin/miniflux"
+        mode: '0755'
+        force: yes
+
+    - name: Create Miniflux config file
+      template:
+        src: ../templates/miniflux.conf.j2
+        dest: /etc/miniflux.conf
+        owner: root
+        group: "{{ miniflux_user }}"
+        mode: '0640'
+      notify: Restart miniflux
+
+    - name: Deploy systemd service file for Miniflux
+      template:
+        src: ../templates/Miniflux.j2
+        dest: /etc/systemd/system/miniflux.service
+      notify:
+        - Reload systemd
+        - Restart miniflux
+
+    - name: Reload systemd
+      systemd:
+        daemon_reload: yes
+
+    - name: Start and enable Miniflux
+      systemd:
+        name: miniflux
+        state: started
+        enabled: yes
+
+    - name: Display access information
+      debug:
+        msg: "Miniflux installed successfully! URL: https://{{ miniflux_domain }}"
+
+  handlers:
+    - name: Reload systemd
+      systemd:
+        daemon_reload: yes
+
+    - name: Restart miniflux
+      systemd:
+        name: miniflux
+        state: restarted

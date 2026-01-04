@@ -1,0 +1,56 @@
+---
+# Initial server setup playbook
+# Usage: ansible-playbook playbooks/init.yml
+
+- name: Initialize server with basic configuration
+  hosts: web_server
+  become: yes
+
+  vars:
+    timezone: "Europe/Berlin"
+
+  tasks:
+    - name: Update package cache
+      apt:
+        update_cache: yes
+
+    - name: Upgrade all packages
+      apt:
+        upgrade: dist
+        autoremove: yes
+        autoclean: yes
+
+    - name: Install essential packages
+      apt:
+        name:
+          - curl
+          - wget
+          - git
+          - htop
+          - vim
+          - unzip
+          - ca-certificates
+          - gnupg
+        state: present
+
+    - name: Set timezone to {{ timezone }}
+      timezone:
+        name: "{{ timezone }}"
+
+    - name: Ensure NTP is installed and running
+      apt:
+        name: systemd-timesyncd
+        state: present
+
+    - name: Enable and start time synchronization
+      systemd:
+        name: systemd-timesyncd
+        state: started
+        enabled: yes
+
+    - name: Display server info
+      debug:
+        msg: |
+          Server initialized successfully!
+          Timezone: {{ timezone }}
+          Hostname: {{ ansible_hostname }}

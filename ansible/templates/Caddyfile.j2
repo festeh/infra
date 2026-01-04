@@ -16,22 +16,43 @@ etobaza.dimalip.in {
 
 coach.dimalip.in {
     reverse_proxy localhost:8080
+    log
 }
 
 rumi.dimalip.in {
     reverse_proxy localhost:9090
+    log
 }
 
 dimaist.dimalip.in {
     reverse_proxy localhost:3000
+    log
 }
 
 silence.dimalip.in {
     reverse_proxy localhost:4000
+    log
 }
 
 papujki.space {
     reverse_proxy localhost:3333
+    log
+}
+
+dimalip.in, www.dimalip.in {
+    # Proxy API requests to backend
+    handle /api/* {
+        reverse_proxy localhost:6190
+    }
+
+    # Serve static files and SPA
+    handle {
+        root * /opt/dimalip.in/dist
+        encode gzip
+        try_files {path} /index.html
+        file_server
+    }
+    log
 }
 
 life.dimalip.in {
@@ -47,4 +68,10 @@ life.dimalip.in {
         try_files {path} /index.html
         file_server
     }
+    log
+}
+
+rss.dimalip.in {
+    reverse_proxy localhost:8085
+    log
 }
