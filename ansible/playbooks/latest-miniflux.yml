@@ -2,6 +2,7 @@
 # Usage:
 #   export MINIFLUX_DB_PASSWORD=your_db_password
 #   export MINIFLUX_ADMIN_PASSWORD=your_admin_password
+#   export MINIFLUX_API_KEY=your_api_key  # Optional, for feed subscriptions
 #   ansible-playbook playbooks/latest-miniflux.yml
 
 - name: Install and Configure Miniflux
@@ -17,6 +18,15 @@
     miniflux_db_password: "{{ lookup('env', 'MINIFLUX_DB_PASSWORD') }}"
     miniflux_admin_username: "admin"
     miniflux_admin_password: "{{ lookup('env', 'MINIFLUX_ADMIN_PASSWORD') }}"
+    miniflux_api_key: "{{ lookup('env', 'MINIFLUX_API_KEY') }}"
+    # Feed subscriptions (add feeds here)
+    miniflux_feeds:
+      - name: "The Rundown AI"
+        url: "https://rss.beehiiv.com/feeds/2R3C6Bt5wj.xml"
+      - name: "Ben's Bites"
+        url: "https://kill-the-newsletter.com/feeds/zfgn5ml3cwlkndk479q8.xml"
+      - name: "The Sequence"
+        url: "https://kill-the-newsletter.com/feeds/cd8szgcslg0bka8yek6f.xml"
 
   pre_tasks:
     - name: Validate required environment variables
@@ -67,6 +77,13 @@
       postgresql_ext:
         name: hstore
         db: "{{ miniflux_db_name }}"
+        state: present
+
+    - name: Grant superuser to miniflux user (required for migrations)
+      become_user: postgres
+      postgresql_user:
+        name: "{{ miniflux_db_user }}"
+        role_attr_flags: SUPERUSER
         state: present
 
     # --- Miniflux Installation ---
@@ -122,6 +139,77 @@
         name: miniflux
         state: started
         enabled: yes
+
+    # --- User Preferences (requires API key) ---
+    - name: Wait for Miniflux to be ready
+      uri:
+        url: "https://{{ miniflux_domain }}/healthcheck"
+        status_code: 200
+      register: healthcheck
+      until: healthcheck.status == 200
+      retries: 10
+      delay: 2
+      when: miniflux_api_key | length > 0
+
+    - name: Get current user info
+      uri:
+        url: "https://{{ miniflux_domain }}/v1/me"
+        method: GET
+        headers:
+          X-Auth-Token: "{{ miniflux_api_key }}"
+        return_content: yes
+      register: current_user
+      when: miniflux_api_key | length > 0
+      delegate_to: localhost
+      become: no
+
+    - name: Set dark theme for user
+      uri:
+        url: "https://{{ miniflux_domain }}/v1/users/{{ current_user.json.id }}"
+        method: PUT
+        headers:
+          X-Auth-Token: "{{ miniflux_api_key }}"
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          theme: "dark_sans_serif"
+        status_code: [200, 201]
+      when:
+        - miniflux_api_key | length > 0
+        - current_user.json.theme != "dark_sans_serif"
+      delegate_to: localhost
+      become: no
+
+    # --- Feed Subscriptions (requires API key) ---
+    - name: Get existing feeds
+      uri:
+        url: "https://{{ miniflux_domain }}/v1/feeds"
+        method: GET
+        headers:
+          X-Auth-Token: "{{ miniflux_api_key }}"
+        return_content: yes
+      register: existing_feeds
+      when: miniflux_api_key | length > 0
+      delegate_to: localhost
+      become: no
+
+    - name: Subscribe to feeds (idempotent)
+      uri:
+        url: "https://{{ miniflux_domain }}/v1/feeds"
+        method: POST
+        headers:
+          X-Auth-Token: "{{ miniflux_api_key }}"
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          feed_url: "{{ item.url }}"
+        status_code: [200, 201]
+      loop: "{{ miniflux_feeds }}"
+      when:
+        - miniflux_api_key | length > 0
+        - item.url not in (existing_feeds.json | map(attribute='feed_url') | list)
+      delegate_to: localhost
+      become: no
 
     - name: Display access information
       debug:
