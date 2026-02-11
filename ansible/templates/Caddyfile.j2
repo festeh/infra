@@ -15,7 +15,31 @@ etobaza.dimalip.in {
 }
 
 coach.dimalip.in {
-    reverse_proxy localhost:8080
+    @admin path /admin*
+
+    handle @admin {
+      forward_auth localhost:4180 {
+        uri /oauth2/auth
+        copy_headers Authorization X-Auth-User Set-Cookie
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-Uri {uri}
+
+        @error status 401
+        handle_response @error {
+          redir https://coach.dimalip.in/oauth2/sign_in?rd={uri}
+        }
+      }
+      reverse_proxy localhost:8080
+    }
+
+    handle /oauth2/* {
+      reverse_proxy localhost:4180
+    }
+
+    handle {
+      reverse_proxy localhost:8080
+    }
+
     log
 }
 
@@ -73,5 +97,15 @@ life.dimalip.in {
 
 rss.dimalip.in {
     reverse_proxy localhost:8085
+    log
+}
+
+code.dimalip.in {
+    reverse_proxy localhost:4096
+    log
+}
+
+{{ bro_host }} {
+    reverse_proxy localhost:7880
     log
 }

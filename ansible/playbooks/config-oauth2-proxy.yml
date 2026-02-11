@@ -1,0 +1,70 @@
+---
+- name: Setup OAuth2 Proxy for admin auth
+  hosts: all
+  become: true
+  vars_files:
+    - ../secrets.yml
+  tasks:
+
+    - name: Download oauth2-proxy
+      ansible.builtin.get_url:
+        url: https://github.com/oauth2-proxy/oauth2-proxy/releases/download/v7.14.2/oauth2-proxy-v7.14.2.linux-amd64.tar.gz
+        dest: /tmp/oauth2-proxy.tar.gz
+
+    - name: Extract oauth2-proxy
+      ansible.builtin.unarchive:
+        src: /tmp/oauth2-proxy.tar.gz
+        dest: /tmp/
+        remote_src: yes
+
+    - name: Install oauth2-proxy binary
+      ansible.builtin.copy:
+        src: /tmp/oauth2-proxy-v7.14.2.linux-amd64/oauth2-proxy
+        dest: /usr/local/bin/oauth2-proxy
+        mode: '0755'
+        remote_src: yes
+
+    - name: Create config directory
+      ansible.builtin.file:
+        path: /etc/oauth2-proxy
+        state: directory
+        mode: '0700'
+
+    - name: Deploy oauth2-proxy config
+      ansible.builtin.template:
+        src: ../templates/oauth2-proxy.cfg.j2
+        dest: /etc/oauth2-proxy/oauth2-proxy.cfg
+        mode: '0600'
+      notify: Restart oauth2-proxy
+
+    - name: Deploy allowed emails
+      ansible.builtin.copy:
+        content: |
+          {{ oauth2_allowed_email }}
+        dest: /etc/oauth2-proxy/allowed_emails.txt
+        mode: '0600'
+      notify: Restart oauth2-proxy
+
+    - name: Deploy systemd service
+      ansible.builtin.template:
+        src: ../templates/OAuth2Proxy.j2
+        dest: /etc/systemd/system/oauth2-proxy.service
+      notify:
+        - Reload systemd
+        - Restart oauth2-proxy
+
+    - name: Ensure oauth2-proxy is running
+      systemd:
+        name: oauth2-proxy
+        state: started
+        enabled: yes
+
+  handlers:
+    - name: Reload systemd
+      systemd:
+        daemon_reload: yes
+
+    - name: Restart oauth2-proxy
+      systemd:
+        name: oauth2-proxy
+        state: restarted

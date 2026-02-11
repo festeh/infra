@@ -1,0 +1,14 @@
+provider = "github"
+client_id = "{{ oauth2_client_id }}"
+client_secret = "{{ oauth2_client_secret }}"
+cookie_secret = "{{ oauth2_cookie_secret }}"
+cookie_secure = true
+
+http_address = "127.0.0.1:4180"
+redirect_url = "https://coach.dimalip.in/oauth2/callback"
+
+authenticated_emails_file = "/etc/oauth2-proxy/allowed_emails.txt"
+
+upstreams = ["static://200"]
+
+skip_provider_button = true
