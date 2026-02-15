@@ -1,0 +1,14 @@
+[Unit]
+Description=CLIProxyAPI
+After=network-online.target
+
+[Service]
+User={{ cliproxyapi_user }}
+WorkingDirectory={{ cliproxyapi_dir }}
+ExecStart={{ cliproxyapi_dir }}/cli-proxy-api
+Restart=always
+RestartSec=5
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

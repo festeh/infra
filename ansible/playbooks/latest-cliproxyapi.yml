@@ -1,0 +1,125 @@
+---
+- name: Install CLIProxyAPI
+  hosts: all
+  become: true
+  vars:
+    cliproxyapi_user: "cliproxyapi"
+    cliproxyapi_dir: "/opt/cliproxyapi"
+    cliproxyapi_config_dir: "/etc/cliproxyapi"
+    cliproxyapi_port: 8317
+    cliproxyapi_arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
+    cliproxyapi_api_keys: "{{ lookup('env', 'CLIPROXYAPI_API_KEYS').split(',') }}"
+    cliproxyapi_mgmt_key: "{{ lookup('env', 'CLIPROXYAPI_MGMT_KEY') }}"
+
+  pre_tasks:
+    - name: Validate required environment variables
+      assert:
+        that:
+          - cliproxyapi_api_keys | length > 0
+          - cliproxyapi_api_keys[0] | length > 0
+          - cliproxyapi_mgmt_key | length > 0
+        fail_msg: |
+          Missing required environment variables!
+          Please set:
+            export CLIPROXYAPI_API_KEYS=key1,key2
+            export CLIPROXYAPI_MGMT_KEY=your_management_key
+
+  tasks:
+    - name: Get latest CLIProxyAPI version
+      uri:
+        url: https://api.github.com/repos/router-for-me/CLIProxyAPI/releases/latest
+        return_content: yes
+      register: cliproxyapi_release
+      delegate_to: localhost
+      become: no
+
+    - name: Set version fact
+      set_fact:
+        cliproxyapi_version: "{{ cliproxyapi_release.json.tag_name | regex_replace('^v', '') }}"
+
+    - name: Create CLIProxyAPI system user
+      user:
+        name: "{{ cliproxyapi_user }}"
+        system: yes
+        create_home: no
+        shell: /usr/sbin/nologin
+
+    - name: Create CLIProxyAPI directories
+      loop:
+        - "{{ cliproxyapi_dir }}"
+        - "{{ cliproxyapi_config_dir }}"
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ cliproxyapi_user }}"
+        group: "{{ cliproxyapi_user }}"
+        mode: '0755'
+
+    - name: Download CLIProxyAPI release
+      get_url:
+        url: "https://github.com/router-for-me/CLIProxyAPI/releases/download/v{{ cliproxyapi_version }}/CLIProxyAPI_{{ cliproxyapi_version }}_linux_{{ cliproxyapi_arch }}.tar.gz"
+        dest: "/tmp/cliproxyapi.tar.gz"
+        mode: '0644'
+        force: yes
+
+    - name: Extract CLIProxyAPI binary
+      unarchive:
+        src: /tmp/cliproxyapi.tar.gz
+        dest: "{{ cliproxyapi_dir }}"
+        remote_src: yes
+        owner: "{{ cliproxyapi_user }}"
+        group: "{{ cliproxyapi_user }}"
+      notify: Restart cliproxyapi
+
+    - name: Clean up archive
+      file:
+        path: /tmp/cliproxyapi.tar.gz
+        state: absent
+
+    - name: Deploy config file
+      template:
+        src: ../templates/cliproxyapi.config.yaml.j2
+        dest: "{{ cliproxyapi_config_dir }}/config.yaml"
+        owner: "{{ cliproxyapi_user }}"
+        group: "{{ cliproxyapi_user }}"
+        mode: '0640'
+      notify: Restart cliproxyapi
+
+    - name: Symlink config into install dir
+      file:
+        src: "{{ cliproxyapi_config_dir }}/config.yaml"
+        dest: "{{ cliproxyapi_dir }}/config.yaml"
+        state: link
+        force: yes
+
+    - name: Deploy systemd service file
+      template:
+        src: ../templates/CLIProxyAPI.j2
+        dest: /etc/systemd/system/cliproxyapi.service
+      notify:
+        - Reload systemd
+        - Restart cliproxyapi
+
+    - name: Reload systemd
+      systemd:
+        daemon_reload: yes
+
+    - name: Start and enable CLIProxyAPI
+      systemd:
+        name: cliproxyapi
+        state: started
+        enabled: yes
+
+    - name: Display version
+      debug:
+        msg: "CLIProxyAPI {{ cliproxyapi_version }} installed at {{ cliproxyapi_dir }}"
+
+  handlers:
+    - name: Reload systemd
+      systemd:
+        daemon_reload: yes
+
+    - name: Restart cliproxyapi
+      systemd:
+        name: cliproxyapi
+        state: restarted

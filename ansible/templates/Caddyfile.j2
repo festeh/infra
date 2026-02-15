@@ -105,6 +105,11 @@ code.dimalip.in {
     log
 }
 
+ai.dimalip.in {
+    reverse_proxy localhost:8317
+    log
+}
+
 {{ bro_host }} {
     reverse_proxy localhost:7880
     log
