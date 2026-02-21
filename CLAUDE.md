@@ -4,11 +4,13 @@ This directory contains Ansible playbooks for managing the VPS server.
 
 ## Inventory
 
-The inventory file is not tracked in git. Create `inventory.ini` with:
+The inventory file is not tracked in git. Create `inventory.yml` with:
 
-```ini
-[web_server]
-your-server.example.com ansible_user=your_user
+```yaml
+all:
+  hosts:
+    web_server:
+      ansible_host: your-server.example.com
 ```
 
 ## Playbooks
@@ -27,10 +29,10 @@ your-server.example.com ansible_user=your_user
 cd ~/projects/infra/ansible
 
 # Initialize server (run first on fresh install)
-ansible-playbook playbooks/init.yml -i inventory.ini
+ansible-playbook playbooks/init.yml
 
 # Install Miniflux (requires env vars)
 export MINIFLUX_DB_PASSWORD=your_password
 export MINIFLUX_ADMIN_PASSWORD=your_password
-ansible-playbook playbooks/latest-miniflux.yml -i inventory.ini
+ansible-playbook playbooks/latest-miniflux.yml
 ```
