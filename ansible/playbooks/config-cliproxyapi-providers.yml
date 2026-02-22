@@ -12,6 +12,8 @@
       - "{{ lookup('env', 'OPENROUTER_API_KEY') }}"
     groq_api_keys:
       - "{{ lookup('env', 'GROQ_API_KEY') }}"
+    kimi_api_keys:
+      - "{{ lookup('env', 'KIMI_API_KEY') }}"
 
   pre_tasks:
     - name: Validate required environment variables
@@ -22,6 +24,7 @@
           - cliproxyapi_mgmt_key | length > 0
           - openrouter_api_keys[0] | length > 0
           - groq_api_keys[0] | length > 0
+          - kimi_api_keys[0] | length > 0
         fail_msg: |
           Missing required environment variables!
           Please set:
@@ -29,6 +32,7 @@
             export CLIPROXYAPI_MGMT_KEY=your_management_key
             export OPENROUTER_API_KEY=your_openrouter_key
             export GROQ_API_KEY=your_groq_key
+            export KIMI_API_KEY=your_kimi_key
 
   tasks:
     - name: Deploy config with providers

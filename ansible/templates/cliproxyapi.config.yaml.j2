@@ -43,7 +43,7 @@ nonstream-keepalive-interval: 15
 streaming:
   keepalive-seconds: 15
   bootstrap-retries: 1
-{% if openrouter_api_keys is defined or groq_api_keys is defined %}
+{% if openrouter_api_keys is defined or groq_api_keys is defined or kimi_api_keys is defined %}
 
 openai-compatibility:
 {% if openrouter_api_keys is defined %}
@@ -64,5 +64,17 @@ openai-compatibility:
     models:
       - name: "moonshotai/kimi-k2-instruct"
       - name: "qwen/qwen3-32b"
+{% endif %}
+{% if kimi_api_keys is defined %}
+  - name: "kimi"
+    base-url: "https://api.kimi.com/coding/v1"
+    headers:
+      User-Agent: "KimiCLI/1.12"
+    api-key-entries:
+{% for key in kimi_api_keys %}
+      - api-key: "{{ key }}"
+{% endfor %}
+    models:
+      - name: "kimi-for-code"
 {% endif %}
 {% endif %}
