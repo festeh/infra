@@ -76,13 +76,19 @@
         path: /tmp/cliproxyapi.tar.gz
         state: absent
 
-    - name: Deploy config file
+    - name: Check if config exists
+      stat:
+        path: "{{ cliproxyapi_config_dir }}/config.yaml"
+      register: cliproxyapi_config_stat
+
+    - name: Deploy initial config file
       template:
         src: ../templates/cliproxyapi.config.yaml.j2
         dest: "{{ cliproxyapi_config_dir }}/config.yaml"
         owner: "{{ cliproxyapi_user }}"
         group: "{{ cliproxyapi_user }}"
         mode: '0640'
+      when: not cliproxyapi_config_stat.stat.exists
       notify: Restart cliproxyapi
 
     - name: Symlink config into install dir

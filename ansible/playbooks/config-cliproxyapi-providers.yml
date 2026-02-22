@@ -1,0 +1,47 @@
+---
+- name: Configure CLIProxyAPI providers
+  hosts: all
+  become: true
+  vars:
+    cliproxyapi_user: "cliproxyapi"
+    cliproxyapi_config_dir: "/etc/cliproxyapi"
+    cliproxyapi_port: 8317
+    cliproxyapi_api_keys: "{{ lookup('env', 'CLIPROXYAPI_API_KEYS').split(',') }}"
+    cliproxyapi_mgmt_key: "{{ lookup('env', 'CLIPROXYAPI_MGMT_KEY') }}"
+    openrouter_api_keys:
+      - "{{ lookup('env', 'OPENROUTER_API_KEY') }}"
+    groq_api_keys:
+      - "{{ lookup('env', 'GROQ_API_KEY') }}"
+
+  pre_tasks:
+    - name: Validate required environment variables
+      assert:
+        that:
+          - cliproxyapi_api_keys | length > 0
+          - cliproxyapi_api_keys[0] | length > 0
+          - cliproxyapi_mgmt_key | length > 0
+          - openrouter_api_keys[0] | length > 0
+          - groq_api_keys[0] | length > 0
+        fail_msg: |
+          Missing required environment variables!
+          Please set:
+            export CLIPROXYAPI_API_KEYS=key1,key2
+            export CLIPROXYAPI_MGMT_KEY=your_management_key
+            export OPENROUTER_API_KEY=your_openrouter_key
+            export GROQ_API_KEY=your_groq_key
+
+  tasks:
+    - name: Deploy config with providers
+      template:
+        src: ../templates/cliproxyapi.config.yaml.j2
+        dest: "{{ cliproxyapi_config_dir }}/config.yaml"
+        owner: "{{ cliproxyapi_user }}"
+        group: "{{ cliproxyapi_user }}"
+        mode: '0640'
+      notify: Restart cliproxyapi
+
+  handlers:
+    - name: Restart cliproxyapi
+      systemd:
+        name: cliproxyapi
+        state: restarted

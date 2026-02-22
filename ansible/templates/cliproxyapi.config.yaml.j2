@@ -43,3 +43,26 @@ nonstream-keepalive-interval: 15
 streaming:
   keepalive-seconds: 15
   bootstrap-retries: 1
+{% if openrouter_api_keys is defined or groq_api_keys is defined %}
+
+openai-compatibility:
+{% if openrouter_api_keys is defined %}
+  - name: "openrouter"
+    base-url: "https://openrouter.ai/api/v1"
+    api-key-entries:
+{% for key in openrouter_api_keys %}
+      - api-key: "{{ key }}"
+{% endfor %}
+{% endif %}
+{% if groq_api_keys is defined %}
+  - name: "groq"
+    base-url: "https://api.groq.com/openai/v1"
+    api-key-entries:
+{% for key in groq_api_keys %}
+      - api-key: "{{ key }}"
+{% endfor %}
+    models:
+      - name: "moonshotai/kimi-k2-instruct"
+      - name: "qwen/qwen3-32b"
+{% endif %}
+{% endif %}
