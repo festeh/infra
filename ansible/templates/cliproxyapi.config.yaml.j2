@@ -43,7 +43,7 @@ nonstream-keepalive-interval: 15
 streaming:
   keepalive-seconds: 15
   bootstrap-retries: 1
-{% if openrouter_api_keys is defined or groq_api_keys is defined or kimi_api_keys is defined %}
+{% if openrouter_api_keys is defined or groq_api_keys is defined or kimi_api_keys is defined or chutes_api_keys is defined %}
 
 openai-compatibility:
 {% if openrouter_api_keys is defined %}
@@ -77,5 +77,13 @@ openai-compatibility:
     models:
       - name: "kimi-for-code"
         alias: "default"
+{% endif %}
+{% if chutes_api_keys is defined %}
+  - name: "chutes"
+    base-url: "https://llm.chutes.ai/v1"
+    api-key-entries:
+{% for key in chutes_api_keys %}
+      - api-key: "{{ key }}"
+{% endfor %}
 {% endif %}
 {% endif %}

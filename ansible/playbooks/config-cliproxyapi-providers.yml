@@ -14,6 +14,8 @@
       - "{{ lookup('env', 'GROQ_API_KEY') }}"
     kimi_api_keys:
       - "{{ lookup('env', 'KIMI_API_KEY') }}"
+    chutes_api_keys:
+      - "{{ lookup('env', 'CHUTES_API_TOKEN') }}"
 
   pre_tasks:
     - name: Validate required environment variables
@@ -25,6 +27,7 @@
           - openrouter_api_keys[0] | length > 0
           - groq_api_keys[0] | length > 0
           - kimi_api_keys[0] | length > 0
+          - chutes_api_keys[0] | length > 0
         fail_msg: |
           Missing required environment variables!
           Please set:
@@ -33,6 +36,7 @@
             export OPENROUTER_API_KEY=your_openrouter_key
             export GROQ_API_KEY=your_groq_key
             export KIMI_API_KEY=your_kimi_key
+            export CHUTES_API_TOKEN=your_chutes_token
 
   tasks:
     - name: Deploy config with providers
