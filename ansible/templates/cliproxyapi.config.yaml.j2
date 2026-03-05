@@ -85,5 +85,30 @@ openai-compatibility:
 {% for key in chutes_api_keys %}
       - api-key: "{{ key }}"
 {% endfor %}
+{% if chutes_models is defined and chutes_models | length > 0 %}
+    models:
+{% for model in chutes_models %}
+      - name: "{{ model }}"
+{% endfor %}
+{% endif %}
+{% if chutes_fallback_groups is defined %}
+{% for group in chutes_fallback_groups %}
+{% if group | length > 0 %}
+{% set group_idx = loop.index %}
+{% for model in group %}
+  - name: "chutes-g{{ group_idx }}-{{ loop.index0 }}"
+    priority: {{ 40 - loop.index0 * 10 }}
+    base-url: "https://llm.chutes.ai/v1"
+    api-key-entries:
+{% for key in chutes_api_keys %}
+      - api-key: "{{ key }}"
+{% endfor %}
+    models:
+      - name: "{{ model }}"
+        alias: "chutes-group{{ group_idx }}"
+{% endfor %}
+{% endif %}
+{% endfor %}
+{% endif %}
 {% endif %}
 {% endif %}

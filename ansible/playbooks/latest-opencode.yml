@@ -1,0 +1,90 @@
+---
+- name: Install latest OpenCode
+  hosts: all
+  become: true
+  vars:
+    opencode_user: "opencode"
+    opencode_dir: "/opt/opencode"
+    opencode_port: 4096
+    opencode_arch: "{{ 'arm64' if ansible_facts['architecture'] == 'aarch64' else 'x64' }}"
+
+  tasks:
+    - name: Get latest OpenCode version
+      uri:
+        url: https://api.github.com/repos/anomalyco/opencode/releases/latest
+        return_content: yes
+      register: opencode_release
+      delegate_to: localhost
+      become: no
+
+    - name: Set version fact
+      set_fact:
+        opencode_version: "{{ opencode_release.json.tag_name | regex_replace('^v', '') }}"
+
+    - name: Create OpenCode system user
+      user:
+        name: "{{ opencode_user }}"
+        system: yes
+        create_home: no
+        shell: /usr/sbin/nologin
+
+    - name: Create OpenCode directory
+      file:
+        path: "{{ opencode_dir }}"
+        state: directory
+        owner: "{{ opencode_user }}"
+        group: "{{ opencode_user }}"
+        mode: '0755'
+
+    - name: Download OpenCode release
+      get_url:
+        url: "https://github.com/anomalyco/opencode/releases/download/v{{ opencode_version }}/opencode-linux-{{ opencode_arch }}.tar.gz"
+        dest: /tmp/opencode.tar.gz
+        mode: '0644'
+        force: yes
+
+    - name: Extract OpenCode binary
+      unarchive:
+        src: /tmp/opencode.tar.gz
+        dest: "{{ opencode_dir }}"
+        remote_src: yes
+        owner: "{{ opencode_user }}"
+        group: "{{ opencode_user }}"
+      notify: Restart opencode
+
+    - name: Clean up archive
+      file:
+        path: /tmp/opencode.tar.gz
+        state: absent
+
+    - name: Deploy systemd service file
+      template:
+        src: ../templates/OpenCode.j2
+        dest: /etc/systemd/system/opencode.service
+      notify:
+        - Reload systemd
+        - Restart opencode
+
+    - name: Reload systemd
+      systemd:
+        daemon_reload: yes
+
+    - name: Start and enable OpenCode
+      systemd:
+        name: opencode
+        state: started
+        enabled: yes
+
+    - name: Display version
+      debug:
+        msg: "OpenCode {{ opencode_version }} installed at {{ opencode_dir }}"
+
+  handlers:
+    - name: Reload systemd
+      systemd:
+        daemon_reload: yes
+
+    - name: Restart opencode
+      systemd:
+        name: opencode
+        state: restarted

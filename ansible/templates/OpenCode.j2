@@ -1,0 +1,14 @@
+[Unit]
+Description=OpenCode
+After=network-online.target
+
+[Service]
+User=root
+WorkingDirectory={{ opencode_dir }}
+ExecStart={{ opencode_dir }}/opencode web --hostname 0.0.0.0 --port {{ opencode_port }}
+Restart=always
+RestartSec=5
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
