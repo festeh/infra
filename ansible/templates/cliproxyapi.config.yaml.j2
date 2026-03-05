@@ -43,7 +43,7 @@ nonstream-keepalive-interval: 15
 streaming:
   keepalive-seconds: 15
   bootstrap-retries: 1
-{% if openrouter_api_keys is defined or groq_api_keys is defined or kimi_api_keys is defined or chutes_api_keys is defined %}
+{% if openrouter_api_keys is defined or groq_api_keys is defined or alibaba_api_keys is defined or gemini_api_keys is defined or chutes_api_keys is defined %}
 
 openai-compatibility:
 {% if openrouter_api_keys is defined %}
@@ -65,18 +65,30 @@ openai-compatibility:
       - name: "moonshotai/kimi-k2-instruct"
       - name: "qwen/qwen3-32b"
 {% endif %}
-{% if kimi_api_keys is defined %}
-  - name: "kimi"
-    base-url: "https://api.kimi.com/coding/v1"
-    headers:
-      User-Agent: "KimiCLI/1.12"
+{% if alibaba_api_keys is defined %}
+  - name: "alibaba"
+    priority: 10
+    base-url: "https://coding-intl.dashscope.aliyuncs.com/v1"
     api-key-entries:
-{% for key in kimi_api_keys %}
+{% for key in alibaba_api_keys %}
       - api-key: "{{ key }}"
 {% endfor %}
     models:
-      - name: "kimi-for-code"
-        alias: "default"
+      - name: "qwen3.5-plus"
+      - name: "glm-5"
+      - name: "kimi-k2.5"
+      - name: "MiniMax-M2.5"
+{% endif %}
+{% if gemini_api_keys is defined %}
+  - name: "gemini"
+    base-url: "https://generativelanguage.googleapis.com/v1beta/openai"
+    api-key-entries:
+{% for key in gemini_api_keys %}
+      - api-key: "{{ key }}"
+{% endfor %}
+    models:
+      - name: "gemini-2.5-flash"
+      - name: "gemini-3.1-flash-lite-preview"
 {% endif %}
 {% if chutes_api_keys is defined %}
   - name: "chutes"
@@ -89,24 +101,8 @@ openai-compatibility:
     models:
 {% for model in chutes_models %}
       - name: "{{ model }}"
-{% endfor %}
-{% endif %}
-{% if chutes_fallback_groups is defined %}
-{% for group in chutes_fallback_groups %}
-{% if group | length > 0 %}
-{% set group_idx = loop.index %}
-{% for model in group %}
-  - name: "chutes-g{{ group_idx }}-{{ loop.index0 }}"
-    priority: {{ 40 - loop.index0 * 10 }}
-    base-url: "https://llm.chutes.ai/v1"
-    api-key-entries:
-{% for key in chutes_api_keys %}
-      - api-key: "{{ key }}"
-{% endfor %}
-    models:
-      - name: "{{ model }}"
-        alias: "chutes-group{{ group_idx }}"
-{% endfor %}
+{% if chutes_aliases is defined and model in chutes_aliases %}
+        alias: "{{ chutes_aliases[model] }}"
 {% endif %}
 {% endfor %}
 {% endif %}

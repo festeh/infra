@@ -3,6 +3,8 @@ client_id = "{{ oauth2_client_id }}"
 client_secret = "{{ oauth2_client_secret }}"
 cookie_secret = "{{ oauth2_cookie_secret }}"
 cookie_secure = true
+cookie_domains = [".dimalip.in"]
+whitelist_domains = [".dimalip.in"]
 
 http_address = "127.0.0.1:4180"
 redirect_url = "https://coach.dimalip.in/oauth2/callback"

@@ -1,0 +1,58 @@
+---
+- name: Configure OpenCode providers
+  hosts: all
+  become: true
+  vars:
+    opencode_dir: "/opt/opencode"
+    alibaba_api_keys:
+      - "{{ lookup('env', 'ALIBABA_API_KEY') }}"
+    gemini_api_keys:
+      - "{{ lookup('env', 'GEMINI_API_KEY') }}"
+    groq_api_keys:
+      - "{{ lookup('env', 'GROQ_API_KEY') }}"
+    openrouter_api_keys:
+      - "{{ lookup('env', 'OPENROUTER_API_KEY') }}"
+    chutes_api_keys:
+      - "{{ lookup('env', 'CHUTES_API_TOKEN') }}"
+    cliproxyapi_api_keys:
+      - "{{ lookup('env', 'CLIPROXYAPI_API_KEY') }}"
+
+  pre_tasks:
+    - name: Read chutes models from config.toml
+      command: >
+        python3 -c "import tomllib, json; cfg = tomllib.load(open('{{ playbook_dir }}/../../chutes-cli/config.toml', 'rb')); print(json.dumps({'all': cfg['models']['all'], 'aliases': cfg.get('aliases', {})}))"
+      register: chutes_models_raw
+      delegate_to: localhost
+      become: false
+      changed_when: false
+      check_mode: false
+
+    - name: Set chutes models fact
+      set_fact:
+        chutes_models: "{{ (chutes_models_raw.stdout | from_json).all }}"
+        chutes_aliases: "{{ (chutes_models_raw.stdout | from_json).aliases }}"
+
+  tasks:
+    - name: Ensure global config directory exists
+      file:
+        path: /root/.config/opencode
+        state: directory
+        mode: '0755'
+
+    - name: Deploy OpenCode global config
+      template:
+        src: ../templates/opencode.json.j2
+        dest: /root/.config/opencode/opencode.json
+        mode: '0640'
+      notify: Restart opencode
+
+    - name: Remove stale project-level config
+      file:
+        path: "{{ opencode_dir }}/opencode.json"
+        state: absent
+
+  handlers:
+    - name: Restart opencode
+      systemd:
+        name: opencode
+        state: restarted

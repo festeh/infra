@@ -1,26 +1,13 @@
 [models]
 all = [
+    "Qwen/Qwen3.5-397B-A17B-TEE",
     "zai-org/GLM-5-TEE",
     "moonshotai/Kimi-K2.5-TEE",
     "MiniMaxAI/MiniMax-M2.5-TEE",
-    "deepseek-ai/DeepSeek-V3.2-TEE",
-    "openai/gpt-oss-120b-TEE",
-    "miromind-ai/MiroThinker-v1.5-235B",
-    "Qwen/Qwen3.5-397B-A17B-TEE",
-    "XiaomiMiMo/MiMo-V2-Flash-TEE",
 ]
 
-# Each group mixes expensive and cheap models
-group_1 = [
-    "zai-org/GLM-5-TEE",              # out $3.00
-    "Qwen/Qwen3.5-397B-A17B-TEE",     # out $1.20
-    "deepseek-ai/DeepSeek-V3.2-TEE",  # out $0.42
-    "openai/gpt-oss-120b-TEE",        # out $0.18
-]
-
-group_2 = [
-    "moonshotai/Kimi-K2.5-TEE",          # out $2.20
-    "MiniMaxAI/MiniMax-M2.5-TEE",        # out $1.10
-    "miromind-ai/MiroThinker-v1.5-235B",  # out $1.20
-    "XiaomiMiMo/MiMo-V2-Flash-TEE",      # out $0.29
-]
+[aliases]
+"Qwen/Qwen3.5-397B-A17B-TEE" = "qwen3.5-plus"
+"zai-org/GLM-5-TEE" = "glm-5"
+"moonshotai/Kimi-K2.5-TEE" = "kimi-k2.5"
+"MiniMaxAI/MiniMax-M2.5-TEE" = "MiniMax-M2.5"

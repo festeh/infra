@@ -110,6 +110,28 @@ ai.dimalip.in {
     log
 }
 
+nb.dimalip.in {
+    handle /oauth2/* {
+        reverse_proxy localhost:4180
+    }
+
+    handle {
+        forward_auth localhost:4180 {
+            uri /oauth2/auth
+            copy_headers Authorization X-Auth-User Set-Cookie
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-Uri {uri}
+
+            @error status 401
+            handle_response @error {
+                redir https://nb.dimalip.in/oauth2/sign_in?rd={uri}
+            }
+        }
+        reverse_proxy localhost:8888
+    }
+    log
+}
+
 {{ bro_host }} {
     reverse_proxy localhost:7880
     log

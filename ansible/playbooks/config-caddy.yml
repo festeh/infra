@@ -2,6 +2,8 @@
 - name: Update Caddy Configuration
   hosts: all
   become: true
+  vars:
+    bro_host: "{{ lookup('env', 'BRO_HOST') }}"
 
   tasks:
   - name: Create log directory

@@ -12,15 +12,17 @@
       - "{{ lookup('env', 'OPENROUTER_API_KEY') }}"
     groq_api_keys:
       - "{{ lookup('env', 'GROQ_API_KEY') }}"
-    kimi_api_keys:
-      - "{{ lookup('env', 'KIMI_API_KEY') }}"
+    alibaba_api_keys:
+      - "{{ lookup('env', 'ALIBABA_API_KEY') }}"
+    gemini_api_keys:
+      - "{{ lookup('env', 'GEMINI_API_KEY') }}"
     chutes_api_keys:
       - "{{ lookup('env', 'CHUTES_API_TOKEN') }}"
 
   pre_tasks:
     - name: Read chutes models from config.toml
       command: >
-        python3 -c "import tomllib, json; cfg = tomllib.load(open('{{ playbook_dir }}/../../chutes-cli/config.toml', 'rb'))['models']; print(json.dumps({'all': cfg['all'], 'groups': [cfg.get('group_1', []), cfg.get('group_2', []), cfg['all']]}))"
+        python3 -c "import tomllib, json; cfg = tomllib.load(open('{{ playbook_dir }}/../../chutes-cli/config.toml', 'rb')); print(json.dumps({'all': cfg['models']['all'], 'aliases': cfg.get('aliases', {})}))"
       register: chutes_models_raw
       delegate_to: localhost
       become: false
@@ -30,7 +32,7 @@
     - name: Set chutes models fact
       set_fact:
         chutes_models: "{{ (chutes_models_raw.stdout | from_json).all }}"
-        chutes_fallback_groups: "{{ (chutes_models_raw.stdout | from_json).groups }}"
+        chutes_aliases: "{{ (chutes_models_raw.stdout | from_json).aliases }}"
 
     - name: Validate required environment variables
       assert:
@@ -40,7 +42,8 @@
           - cliproxyapi_mgmt_key | length > 0
           - openrouter_api_keys[0] | length > 0
           - groq_api_keys[0] | length > 0
-          - kimi_api_keys[0] | length > 0
+          - alibaba_api_keys[0] | length > 0
+          - gemini_api_keys[0] | length > 0
           - chutes_api_keys[0] | length > 0
         fail_msg: |
           Missing required environment variables!
@@ -49,7 +52,8 @@
             export CLIPROXYAPI_MGMT_KEY=your_management_key
             export OPENROUTER_API_KEY=your_openrouter_key
             export GROQ_API_KEY=your_groq_key
-            export KIMI_API_KEY=your_kimi_key
+            export ALIBABA_API_KEY=your_alibaba_key
+            export GEMINI_API_KEY=your_gemini_key
             export CHUTES_API_TOKEN=your_chutes_token
 
   tasks:

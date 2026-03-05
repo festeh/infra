@@ -1,0 +1,63 @@
+{% set providers = {} %}
+{% if alibaba_api_keys is defined %}
+{% set _ = providers.update({"alibaba": {
+  "npm": "@ai-sdk/openai-compatible",
+  "name": "Alibaba",
+  "options": {
+    "baseURL": "https://coding-intl.dashscope.aliyuncs.com/v1",
+    "apiKey": alibaba_api_keys[0]
+  },
+  "models": {
+    "qwen3.5-plus": {"name": "Qwen 3.5 Plus", "limit": {"context": 131072, "output": 16384}},
+    "glm-5": {"name": "GLM 5", "limit": {"context": 131072, "output": 16384}},
+    "kimi-k2.5": {"name": "Kimi K2.5", "limit": {"context": 131072, "output": 16384}},
+    "MiniMax-M2.5": {"name": "MiniMax M2.5", "limit": {"context": 131072, "output": 16384}}
+  }
+}}) %}
+{% endif %}
+{% if groq_api_keys is defined %}
+{% set _ = providers.update({"groq": {
+  "npm": "@ai-sdk/openai-compatible",
+  "name": "Groq",
+  "options": {
+    "baseURL": "https://api.groq.com/openai/v1",
+    "apiKey": groq_api_keys[0]
+  },
+  "models": {
+    "moonshotai/kimi-k2-instruct": {"name": "Kimi K2 Instruct", "limit": {"context": 131072, "output": 16384}},
+    "qwen/qwen3-32b": {"name": "Qwen3 32B", "limit": {"context": 131072, "output": 16384}}
+  }
+}}) %}
+{% endif %}
+{% if cliproxyapi_api_keys is defined %}
+{% set _ = providers.update({"cliproxyapi": {
+  "npm": "@ai-sdk/openai-compatible",
+  "name": "ai.dimalip.in",
+  "options": {
+    "baseURL": "https://ai.dimalip.in/v1",
+    "apiKey": cliproxyapi_api_keys[0]
+  },
+  "models": {}
+}}) %}
+{% endif %}
+{% if chutes_api_keys is defined and chutes_models is defined %}
+{% set chutes_model_map = {} %}
+{% for model in chutes_models %}
+{% if chutes_aliases is defined and model in chutes_aliases %}
+{% set _ = chutes_model_map.update({model: {"name": chutes_aliases[model], "limit": {"context": 131072, "output": 16384}}}) %}
+{% else %}
+{% set _ = chutes_model_map.update({model: {"name": model, "limit": {"context": 131072, "output": 16384}}}) %}
+{% endif %}
+{% endfor %}
+{% set _ = providers.update({"chutes": {
+  "npm": "@ai-sdk/openai-compatible",
+  "name": "Chutes",
+  "options": {
+    "baseURL": "https://llm.chutes.ai/v1",
+    "apiKey": chutes_api_keys[0]
+  },
+  "whitelist": chutes_models,
+  "models": chutes_model_map
+}}) %}
+{% endif %}
+{{ {"$schema": "https://opencode.ai/config.json", "provider": providers} | to_nice_json }}
