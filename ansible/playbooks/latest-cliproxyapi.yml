@@ -7,7 +7,7 @@
     cliproxyapi_dir: "/opt/cliproxyapi"
     cliproxyapi_config_dir: "/etc/cliproxyapi"
     cliproxyapi_port: 8317
-    cliproxyapi_arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
+    cliproxyapi_arch: "{{ 'arm64' if ansible_facts['architecture'] == 'aarch64' else 'amd64' }}"
     cliproxyapi_api_keys: "{{ lookup('env', 'CLIPROXYAPI_API_KEYS').split(',') }}"
     cliproxyapi_mgmt_key: "{{ lookup('env', 'CLIPROXYAPI_MGMT_KEY') }}"
 
