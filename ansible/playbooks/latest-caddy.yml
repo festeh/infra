@@ -33,11 +33,32 @@
         name: caddy
         state: latest
 
+    - name: Create Caddy systemd override directory
+      file:
+        path: /etc/systemd/system/caddy.service.d
+        state: directory
+        mode: '0755'
+
+    - name: Add Caddy auto-restart override
+      copy:
+        dest: /etc/systemd/system/caddy.service.d/restart.conf
+        content: |
+          [Service]
+          Restart=always
+          RestartSec=5
+        mode: '0644'
+      notify: Reload systemd
+
     - name: Ensure Caddy service is enabled and started
       systemd:
         name: caddy
         state: started
         enabled: yes
+
+  handlers:
+    - name: Reload systemd
+      systemd:
+        daemon_reload: yes
 
     - name: Check Caddy version
       command: caddy version
