@@ -124,7 +124,7 @@ nb.dimalip.in {
 
             @error status 401
             handle_response @error {
-                redir https://nb.dimalip.in/oauth2/sign_in?rd={uri}
+                redir https://coach.dimalip.in/oauth2/sign_in?rd=https://nb.dimalip.in{uri}
             }
         }
         reverse_proxy localhost:8888
