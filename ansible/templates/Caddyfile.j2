@@ -111,38 +111,36 @@ ai.dimalip.in {
 }
 
 agents.dimalip.in {
+    # Public API for the coach phone client (no auth)
+    @api path /api/*
+    handle @api {
+      reverse_proxy localhost:8001
+    }
+
+    # Auth callback handled at coach.dimalip.in; sign-in redirects there too.
     handle /oauth2/* {
-        reverse_proxy localhost:4180
+      reverse_proxy localhost:4180
     }
 
+    # Frontend behind oauth2-proxy
     handle {
-        forward_auth localhost:4180 {
-            uri /oauth2/auth
-            copy_headers Authorization X-Auth-User Set-Cookie
-            header_up X-Real-IP {remote_host}
-            header_up X-Forwarded-Uri {uri}
+      forward_auth localhost:4180 {
+        uri /oauth2/auth
+        copy_headers Authorization X-Auth-User Set-Cookie
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-Uri {uri}
 
-            @error status 401
-            handle_response @error {
-                redir https://agents.dimalip.in/oauth2/sign_in?rd=https://agents.dimalip.in{uri}
-            }
+        @error status 401
+        handle_response @error {
+          redir https://coach.dimalip.in/oauth2/sign_in?rd=https://agents.dimalip.in{uri}
         }
-
-        handle /api/* {
-            reverse_proxy localhost:8001 {
-                transport http {
-                    read_timeout 360s
-                }
-            }
-        }
-
-        handle {
-            root * /opt/my-agents/frontend/dist
-            encode gzip
-            try_files {path} /index.html
-            file_server
-        }
+      }
+      root * /opt/my-agents/frontend/dist
+      encode gzip
+      try_files {path} /index.html
+      file_server
     }
+
     log
 }
 
