@@ -1,0 +1,11 @@
+port: 7880
+rtc:
+  port_range_start: 50000
+  port_range_end: 60000
+  use_external_ip: true
+redis:
+  address: localhost:6379
+keys:
+  {{ bro_livekit_api_key }}: {{ bro_livekit_api_secret }}
+logging:
+  level: info

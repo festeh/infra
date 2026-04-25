@@ -1,0 +1,14 @@
+[Unit]
+Description=Bro LiveKit Server
+After=network.target bro-redis.service
+Requires=bro-redis.service
+
+[Service]
+ExecStart=/usr/local/bin/livekit-server --config /opt/bro/livekit.yaml
+Restart=always
+User=root
+Group=root
+WorkingDirectory=/opt/bro
+
+[Install]
+WantedBy=multi-user.target

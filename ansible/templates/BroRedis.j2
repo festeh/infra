@@ -1,0 +1,15 @@
+[Unit]
+Description=Bro Redis
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+ExecStartPre=-/usr/bin/docker rm -f bro-redis
+ExecStart=/usr/bin/docker run --rm --name bro-redis -p 127.0.0.1:6379:6379 redis:7 redis-server --bind 0.0.0.0
+ExecStop=/usr/bin/docker stop bro-redis
+Restart=always
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target

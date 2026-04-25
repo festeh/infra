@@ -1,0 +1,131 @@
+---
+- name: Setup Bro infrastructure (LiveKit + Redis)
+  hosts: web_server
+  vars:
+    bro_host: "{{ lookup('env', 'BRO_HOST') }}"
+    bro_livekit_api_key: "{{ lookup('env', 'BRO_LIVEKIT_API_KEY') }}"
+    bro_livekit_api_secret: "{{ lookup('env', 'BRO_LIVEKIT_API_SECRET') }}"
+
+  pre_tasks:
+    - name: Validate required environment variables
+      assert:
+        that:
+          - bro_host | length > 0
+          - bro_livekit_api_key | length > 0
+          - bro_livekit_api_secret | length > 0
+        fail_msg: "Set BRO_HOST, BRO_LIVEKIT_API_KEY and BRO_LIVEKIT_API_SECRET environment variables"
+
+  tasks:
+    - name: Create bro directory
+      file:
+        path: /opt/bro
+        state: directory
+
+    - name: Get latest LiveKit server release URL
+      uri:
+        url: https://api.github.com/repos/livekit/livekit/releases/latest
+        return_content: yes
+      register: livekit_release
+
+    - name: Extract Linux amd64 download URL
+      set_fact:
+        livekit_url: "{{ livekit_release.json.assets | selectattr('name', 'match', 'livekit_.*_linux_amd64.tar.gz') | map(attribute='browser_download_url') | first }}"
+
+    - name: Download LiveKit server
+      get_url:
+        url: "{{ livekit_url }}"
+        dest: /tmp/livekit.tar.gz
+
+    - name: Extract LiveKit server binary
+      unarchive:
+        src: /tmp/livekit.tar.gz
+        dest: /usr/local/bin/
+        remote_src: yes
+        extra_opts: [--wildcards, "livekit-server"]
+
+    - name: Check LiveKit version
+      command: livekit-server --version
+      register: livekit_version
+      changed_when: false
+
+    - name: Show LiveKit version
+      debug:
+        msg: "{{ livekit_version.stdout }}"
+
+    - name: Deploy LiveKit config
+      template:
+        src: ../templates/bro-livekit.yaml.j2
+        dest: /opt/bro/livekit.yaml
+        mode: "0600"
+      notify: restart bro-livekit
+
+    - name: Install Docker prerequisites
+      apt:
+        name: [ca-certificates, curl, gnupg]
+        state: present
+        update_cache: yes
+
+    - name: Add Docker GPG key
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - name: Add Docker repository
+      apt_repository:
+        repo: "deb https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+        state: present
+
+    - name: Install Docker
+      apt:
+        name: [docker-ce, docker-ce-cli, containerd.io]
+        state: present
+        update_cache: yes
+
+    - name: Enable and start Docker
+      systemd:
+        name: docker
+        enabled: yes
+        state: started
+
+    - name: Pull Redis image
+      command: docker pull redis:7
+      changed_when: false
+
+    - name: Deploy Redis systemd service
+      template:
+        src: ../templates/BroRedis.j2
+        dest: /etc/systemd/system/bro-redis.service
+      notify: restart bro-redis
+
+    - name: Deploy LiveKit systemd service
+      template:
+        src: ../templates/BroLivekit.j2
+        dest: /etc/systemd/system/bro-livekit.service
+      notify: restart bro-livekit
+
+    - name: Enable and start Redis
+      systemd:
+        name: bro-redis
+        enabled: yes
+        state: started
+        daemon_reload: yes
+
+    - name: Enable and start LiveKit
+      systemd:
+        name: bro-livekit
+        enabled: yes
+        state: started
+        daemon_reload: yes
+
+  handlers:
+    - name: restart bro-redis
+      systemd:
+        name: bro-redis
+        state: restarted
+        daemon_reload: yes
+
+    - name: restart bro-livekit
+      systemd:
+        name: bro-livekit
+        state: restarted
+        daemon_reload: yes

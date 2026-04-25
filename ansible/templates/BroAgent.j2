@@ -1,0 +1,15 @@
+[Unit]
+Description=Bro Voice Agent
+After=network.target bro-livekit.service
+Requires=bro-livekit.service
+
+[Service]
+ExecStart=/root/.local/share/mise/shims/uv run python agent/voice_agent.py dev
+Restart=always
+User=root
+Group=root
+WorkingDirectory=/opt/bro
+EnvironmentFile=/opt/bro/.env
+
+[Install]
+WantedBy=multi-user.target
