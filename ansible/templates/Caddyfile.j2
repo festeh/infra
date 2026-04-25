@@ -110,6 +110,15 @@ ai.dimalip.in {
     log
 }
 
+agents.dimalip.in {
+    reverse_proxy localhost:8001 {
+      transport http {
+        read_timeout 360s
+      }
+    }
+    log
+}
+
 nb.dimalip.in {
     handle /oauth2/* {
         reverse_proxy localhost:4180

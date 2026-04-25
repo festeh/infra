@@ -1,0 +1,32 @@
+---
+- name: Render /opt/my-agents/.env from secrets.yml
+  hosts: all
+  become: true
+  vars_files:
+    - ../secrets.yml
+
+  tasks:
+
+  - name: Ensure /opt/my-agents exists
+    file:
+      path: /opt/my-agents
+      state: directory
+      owner: root
+      group: root
+      mode: "0755"
+
+  - name: Template .env
+    template:
+      src: ../templates/Agents.env.j2
+      dest: /opt/my-agents/.env
+      owner: root
+      group: root
+      mode: "0600"
+    notify:
+      - Restart Agents
+
+  handlers:
+  - name: Restart Agents
+    systemd:
+      name: agents
+      state: restarted
