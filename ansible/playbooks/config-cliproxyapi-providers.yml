@@ -12,8 +12,6 @@
       - "{{ lookup('env', 'OPENROUTER_API_KEY') }}"
     groq_api_keys:
       - "{{ lookup('env', 'GROQ_API_KEY') }}"
-    alibaba_api_keys:
-      - "{{ lookup('env', 'ALIBABA_API_KEY') }}"
     gemini_api_keys:
       - "{{ lookup('env', 'GEMINI_API_KEY') }}"
     chutes_api_keys:
@@ -42,7 +40,6 @@
           - cliproxyapi_mgmt_key | length > 0
           - openrouter_api_keys[0] | length > 0
           - groq_api_keys[0] | length > 0
-          - alibaba_api_keys[0] | length > 0
           - gemini_api_keys[0] | length > 0
           - chutes_api_keys[0] | length > 0
         fail_msg: |
@@ -52,7 +49,6 @@
             export CLIPROXYAPI_MGMT_KEY=your_management_key
             export OPENROUTER_API_KEY=your_openrouter_key
             export GROQ_API_KEY=your_groq_key
-            export ALIBABA_API_KEY=your_alibaba_key
             export GEMINI_API_KEY=your_gemini_key
             export CHUTES_API_TOKEN=your_chutes_token
 

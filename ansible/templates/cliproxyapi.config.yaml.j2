@@ -20,7 +20,7 @@ debug: true
 
 commercial-mode: false
 
-logging-to-file: false
+logging-to-file: true
 
 usage-statistics-enabled: true
 
@@ -43,7 +43,7 @@ nonstream-keepalive-interval: 15
 streaming:
   keepalive-seconds: 15
   bootstrap-retries: 1
-{% if openrouter_api_keys is defined or groq_api_keys is defined or alibaba_api_keys is defined or gemini_api_keys is defined or chutes_api_keys is defined %}
+{% if openrouter_api_keys is defined or groq_api_keys is defined or gemini_api_keys is defined or chutes_api_keys is defined %}
 
 openai-compatibility:
 {% if openrouter_api_keys is defined %}
@@ -64,20 +64,6 @@ openai-compatibility:
     models:
       - name: "moonshotai/kimi-k2-instruct"
       - name: "qwen/qwen3-32b"
-{% endif %}
-{% if alibaba_api_keys is defined %}
-  - name: "alibaba"
-    priority: 10
-    base-url: "https://coding-intl.dashscope.aliyuncs.com/v1"
-    api-key-entries:
-{% for key in alibaba_api_keys %}
-      - api-key: "{{ key }}"
-{% endfor %}
-    models:
-      - name: "qwen3.5-plus"
-      - name: "glm-5"
-      - name: "kimi-k2.5"
-      - name: "MiniMax-M2.5"
 {% endif %}
 {% if gemini_api_keys is defined %}
   - name: "gemini"
