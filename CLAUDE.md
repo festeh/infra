@@ -23,6 +23,10 @@ all:
 - **config-caddy.yml** - Configure Caddy
 - **config-coach.yml** - Configure Coach service
 
+## Secrets
+
+Secrets are stored in `ansible/secrets.yml` (not tracked in git). Playbooks that need secrets should source env vars from this file rather than requiring manual exports. Contains API keys for CLIProxyAPI, OAuth2 credentials, etc.
+
 ## Usage
 
 ```bash
