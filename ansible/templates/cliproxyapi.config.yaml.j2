@@ -74,6 +74,11 @@ openai-compatibility:
 {% endfor %}
     models:
       - name: "gemini-2.5-flash"
+{# my-agents requests model "default" — keep this alias alive somewhere when
+   reshuffling providers, or the coach/dimaist agents go dark (June 6 lesson:
+   it rode on the alibaba provider and died with it). #}
+      - name: "gemini-2.5-flash"
+        alias: "default"
       - name: "gemini-3.1-flash-lite-preview"
 {% endif %}
 {% if chutes_api_keys is defined %}
