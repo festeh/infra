@@ -20,6 +20,7 @@ all:
 - **latest-caddy.yml** - Install/update Caddy web server
 - **latest-miniflux.yml** - Install/update Miniflux RSS reader
 - **latest-pocketbase.yml** - Install/update PocketBase
+- **latest-syncthing.yml** - Install/configure Syncthing as encrypted-at-rest vault sync peer (pass `-e laptop_device_id=...`; folder password in secrets.yml)
 - **config-caddy.yml** - Configure Caddy
 - **config-coach.yml** - Configure Coach service
 
