@@ -36,7 +36,31 @@ coach.dimalip.in {
       reverse_proxy localhost:4180
     }
 
+    # Machine clients (extension, phone, scripts): the shared API token.
+    # Header for HTTP; query for WebSockets, which can't set headers.
+    @token header Authorization "Bearer {{ coach_api_token }}"
+    handle @token {
+      reverse_proxy localhost:8080
+    }
+    @token_query query token={{ coach_api_token }}
+    handle @token_query {
+      reverse_proxy localhost:8080
+    }
+
+    # No token: only a browser with an OAuth session gets through (the
+    # admin UI's own API calls arrive here with its session cookie).
     handle {
+      forward_auth localhost:4180 {
+        uri /oauth2/auth
+        copy_headers Authorization X-Auth-User Set-Cookie
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-Uri {uri}
+
+        @error status 401
+        handle_response @error {
+          redir https://coach.dimalip.in/oauth2/sign_in?rd={uri}
+        }
+      }
       reverse_proxy localhost:8080
     }
 
@@ -111,9 +135,36 @@ ai.dimalip.in {
 }
 
 agents.dimalip.in {
-    # Public API for the coach phone client (no auth)
+    # Coach clients reach /api with the shared token (header or query);
+    # browsers on the oauth'd frontend reach it with their session below.
+    @api_token {
+      path /api/*
+      header Authorization "Bearer {{ coach_api_token }}"
+    }
+    handle @api_token {
+      reverse_proxy localhost:8001
+    }
+    @api_token_query {
+      path /api/*
+      query token={{ coach_api_token }}
+    }
+    handle @api_token_query {
+      reverse_proxy localhost:8001
+    }
+
     @api path /api/*
     handle @api {
+      forward_auth localhost:4180 {
+        uri /oauth2/auth
+        copy_headers Authorization X-Auth-User Set-Cookie
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-Uri {uri}
+
+        @error status 401
+        handle_response @error {
+          redir https://coach.dimalip.in/oauth2/sign_in?rd=https://agents.dimalip.in{uri}
+        }
+      }
       reverse_proxy localhost:8001
     }
 
