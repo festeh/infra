@@ -53,6 +53,13 @@ openai-compatibility:
 {% for key in openrouter_api_keys %}
       - api-key: "{{ key }}"
 {% endfor %}
+{# top-5 by token volume on openrouter.ai/rankings as of 2026-07-04 #}
+    models:
+      - name: "deepseek/deepseek-v4-flash"
+      - name: "xiaomi/mimo-v2.5"
+      - name: "minimax/minimax-m3"
+      - name: "z-ai/glm-5.2"
+      - name: "tencent/hy3-preview"
 {% endif %}
 {% if groq_api_keys is defined %}
   - name: "groq"
