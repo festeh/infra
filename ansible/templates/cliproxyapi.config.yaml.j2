@@ -62,8 +62,7 @@ openai-compatibility:
       - api-key: "{{ key }}"
 {% endfor %}
     models:
-      - name: "moonshotai/kimi-k2-instruct"
-      - name: "qwen/qwen3-32b"
+      - name: "qwen/qwen3.6-27b"
 {% endif %}
 {% if gemini_api_keys is defined %}
   - name: "gemini"
