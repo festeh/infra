@@ -43,7 +43,7 @@ nonstream-keepalive-interval: 15
 streaming:
   keepalive-seconds: 15
   bootstrap-retries: 1
-{% if openrouter_api_keys is defined or groq_api_keys is defined or gemini_api_keys is defined or chutes_api_keys is defined %}
+{% if openrouter_api_keys is defined or groq_api_keys is defined or gemini_api_keys is defined %}
 
 openai-compatibility:
 {% if openrouter_api_keys is defined %}
@@ -86,22 +86,5 @@ openai-compatibility:
       - name: "gemini-2.5-flash"
         alias: "default"
       - name: "gemini-3.1-flash-lite-preview"
-{% endif %}
-{% if chutes_api_keys is defined %}
-  - name: "chutes"
-    base-url: "https://llm.chutes.ai/v1"
-    api-key-entries:
-{% for key in chutes_api_keys %}
-      - api-key: "{{ key }}"
-{% endfor %}
-{% if chutes_models is defined and chutes_models | length > 0 %}
-    models:
-{% for model in chutes_models %}
-      - name: "{{ model }}"
-{% if chutes_aliases is defined and model in chutes_aliases %}
-        alias: "{{ chutes_aliases[model] }}"
-{% endif %}
-{% endfor %}
-{% endif %}
 {% endif %}
 {% endif %}

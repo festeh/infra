@@ -14,24 +14,8 @@
       - "{{ lookup('env', 'GROQ_API_KEY') }}"
     gemini_api_keys:
       - "{{ lookup('env', 'GEMINI_API_KEY') }}"
-    chutes_api_keys:
-      - "{{ lookup('env', 'CHUTES_API_TOKEN') }}"
 
   pre_tasks:
-    - name: Read chutes models from config.toml
-      command: >
-        python3 -c "import tomllib, json; cfg = tomllib.load(open('{{ playbook_dir }}/../../chutes-cli/config.toml', 'rb')); print(json.dumps({'all': cfg['models']['all'], 'aliases': cfg.get('aliases', {})}))"
-      register: chutes_models_raw
-      delegate_to: localhost
-      become: false
-      changed_when: false
-      check_mode: false
-
-    - name: Set chutes models fact
-      set_fact:
-        chutes_models: "{{ (chutes_models_raw.stdout | from_json).all }}"
-        chutes_aliases: "{{ (chutes_models_raw.stdout | from_json).aliases }}"
-
     - name: Validate required environment variables
       assert:
         that:
@@ -41,7 +25,6 @@
           - openrouter_api_keys[0] | length > 0
           - groq_api_keys[0] | length > 0
           - gemini_api_keys[0] | length > 0
-          - chutes_api_keys[0] | length > 0
         fail_msg: |
           Missing required environment variables!
           Please set:
@@ -50,7 +33,6 @@
             export OPENROUTER_API_KEY=your_openrouter_key
             export GROQ_API_KEY=your_groq_key
             export GEMINI_API_KEY=your_gemini_key
-            export CHUTES_API_TOKEN=your_chutes_token
 
   tasks:
     - name: Deploy config with providers
