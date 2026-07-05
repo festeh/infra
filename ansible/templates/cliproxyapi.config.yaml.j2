@@ -43,7 +43,7 @@ nonstream-keepalive-interval: 15
 streaming:
   keepalive-seconds: 15
   bootstrap-retries: 1
-{% if openrouter_api_keys is defined or groq_api_keys is defined or gemini_api_keys is defined %}
+{% if openrouter_api_keys is defined or groq_api_keys is defined or gemini_api_keys is defined or kimi_api_keys is defined %}
 
 openai-compatibility:
 {% if openrouter_api_keys is defined %}
@@ -86,5 +86,15 @@ openai-compatibility:
       - name: "gemini-2.5-flash"
         alias: "default"
       - name: "gemini-3.1-flash-lite-preview"
+{% endif %}
+{% if kimi_api_keys is defined %}
+  - name: "kimi"
+    base-url: "https://api.kimi.com/coding/v1"
+    api-key-entries:
+{% for key in kimi_api_keys %}
+      - api-key: "{{ key }}"
+{% endfor %}
+    models:
+      - name: "kimi-for-coding"
 {% endif %}
 {% endif %}
