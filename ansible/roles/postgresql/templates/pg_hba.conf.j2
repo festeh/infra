@@ -1,0 +1,9 @@
+# Managed by Ansible. Local applications receive separate PostgreSQL roles.
+
+# Unix sockets authenticate the operating-system user with peer authentication.
+local   all             postgres                                peer
+local   all             all                                     peer
+
+# TCP is loopback-only and requires SCRAM credentials.
+host    all             all             127.0.0.1/32            scram-sha-256
+host    all             all             ::1/128                 scram-sha-256

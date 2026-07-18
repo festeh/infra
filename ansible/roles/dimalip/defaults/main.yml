@@ -1,0 +1,23 @@
+---
+dimalip_domains:
+  - dimalip.in
+  - www.dimalip.in
+
+dimalip_deploy_user: dimalip-deploy
+dimalip_deploy_group: dimalip-deploy
+dimalip_deploy_home: /var/lib/dimalip-deploy
+dimalip_deploy_public_key: ""
+dimalip_deploy_command_path: /usr/local/libexec/dimalip-deploy-command
+dimalip_incoming_directory: "{{ dimalip_deploy_home }}/incoming"
+
+dimalip_install_root: /opt/dimalip.in
+dimalip_release_root: "{{ dimalip_install_root }}/releases"
+dimalip_current_path: "{{ dimalip_install_root }}/current"
+dimalip_release_retention: 5
+dimalip_max_artifact_bytes: 10485760
+dimalip_max_extracted_bytes: 52428800
+dimalip_max_archive_members: 5000
+
+# Supply this only for the initial restoration. Subsequent application pushes
+# deploy through the restricted project workflow, while Ansible verifies state.
+dimalip_release_artifact_path: ""

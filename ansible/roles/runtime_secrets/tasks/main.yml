@@ -1,0 +1,35 @@
+---
+- name: Validate runtime secret file declarations
+  ansible.builtin.assert:
+    that:
+      - item.path is string
+      - item.path is match('^/etc/[^/]+/[^/]+$')
+      - item.group is string
+      - item.group | length > 0
+      - item.content is string
+    fail_msg: Invalid runtime secret file declaration
+    quiet: true
+  loop: "{{ runtime_secret_files }}"
+  no_log: true
+
+- name: Create protected runtime secret directories
+  ansible.builtin.file:
+    path: "{{ item.path | dirname }}"
+    state: directory
+    owner: root
+    group: "{{ item.group }}"
+    mode: "0750"
+  loop: "{{ runtime_secret_files }}"
+  no_log: true
+
+- name: Install protected runtime secret files
+  ansible.builtin.copy:
+    content: "{{ item.content | trim }}\n"
+    dest: "{{ item.path }}"
+    owner: root
+    group: "{{ item.group }}"
+    mode: "0640"
+  loop: "{{ runtime_secret_files }}"
+  register: runtime_secret_install_results
+  diff: false
+  no_log: true

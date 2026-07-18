@@ -1,0 +1,19 @@
+# Managed by Ansible. This file contains credentials; do not copy or log it.
+DATABASE_URL=postgres://{{ miniflux_db_user }}:{{ miniflux_secrets.db_password }}@{{ miniflux_db_host }}:{{ miniflux_db_port }}/{{ miniflux_db_name }}?sslmode=disable
+
+LISTEN_ADDR={{ miniflux_host }}:{{ miniflux_port }}
+BASE_URL=https://{{ miniflux_domain }}/
+
+RUN_MIGRATIONS=1
+CREATE_ADMIN=1
+ADMIN_USERNAME={{ miniflux_admin_username }}
+ADMIN_PASSWORD={{ miniflux_secrets.admin_password }}
+
+LOG_LEVEL=info
+HTTP_CLIENT_TIMEOUT={{ miniflux_http_client_timeout_seconds }}
+POLLING_FREQUENCY={{ miniflux_polling_frequency_minutes }}
+WORKER_POOL_SIZE={{ miniflux_worker_pool_size }}
+
+CLEANUP_FREQUENCY_HOURS=24
+CLEANUP_ARCHIVE_READ_DAYS=-1
+CLEANUP_ARCHIVE_UNREAD_DAYS=-1

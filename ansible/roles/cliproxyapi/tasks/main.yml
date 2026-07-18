@@ -1,0 +1,426 @@
+---
+- name: Select the reviewed CLIProxyAPI release for this architecture
+  ansible.builtin.set_fact:
+    cliproxyapi_release_architecture: >-
+      {{ cliproxyapi_release_architectures.get(ansible_facts['architecture'], '') }}
+    cliproxyapi_release_checksum: >-
+      {{ cliproxyapi_release_checksums.get(ansible_facts['architecture'], '') }}
+
+- name: Require a reviewed CLIProxyAPI release artifact
+  ansible.builtin.assert:
+    that:
+      - cliproxyapi_release_architecture | length > 0
+      - cliproxyapi_release_checksum is match('^sha256:[0-9a-f]{64}$')
+    fail_msg: >-
+      No pinned CLIProxyAPI {{ cliproxyapi_version }} artifact exists for
+      {{ ansible_facts['architecture'] }}.
+    quiet: true
+
+- name: Load the encrypted CLIProxyAPI secret mapping
+  ansible.builtin.set_fact:
+    cliproxyapi_secrets: >-
+      {{ (vault_service_secrets | default({})).get('cliproxyapi', {}) }}
+  no_log: true
+
+- name: Require complete, distinct CLIProxyAPI credentials
+  ansible.builtin.assert:
+    that:
+      - cliproxyapi_secrets is mapping
+      - cliproxyapi_secrets.get('api_key', '') | length >= 32
+      - cliproxyapi_secrets.get('management_key', '') | length >= 32
+      - cliproxyapi_secrets.api_key != cliproxyapi_secrets.management_key
+      - cliproxyapi_secrets.get('providers', {}) is mapping
+      - cliproxyapi_secrets.get('providers', {}).get('openrouter', '') | length > 10
+      - cliproxyapi_secrets.get('providers', {}).get('groq', '') | length > 10
+      - cliproxyapi_secrets.get('providers', {}).get('gemini', '') | length > 10
+      - cliproxyapi_secrets.get('providers', {}).get('kimi', '') | length > 10
+    fail_msg: The encrypted CLIProxyAPI credential set is incomplete or invalid.
+    quiet: true
+  no_log: true
+
+- name: Check whether the service account already exists
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ cliproxyapi_user }}"
+    fail_key: false
+  check_mode: false
+  changed_when: false
+
+- name: Record whether the service account existed before this run
+  ansible.builtin.set_fact:
+    cliproxyapi_user_existed_before_apply: >-
+      {{ ansible_facts.getent_passwd.get(cliproxyapi_user) is not none }}
+
+- name: Create the CLIProxyAPI system group
+  ansible.builtin.group:
+    name: "{{ cliproxyapi_group }}"
+    system: true
+
+- name: Create the unprivileged CLIProxyAPI service account
+  ansible.builtin.user:
+    name: "{{ cliproxyapi_user }}"
+    group: "{{ cliproxyapi_group }}"
+    home: "{{ cliproxyapi_state_directory }}"
+    shell: /usr/sbin/nologin
+    system: true
+    create_home: false
+    password_lock: true
+
+- name: Defer a first-time CLIProxyAPI installation during check mode
+  ansible.builtin.meta: end_role
+  when:
+    - ansible_check_mode
+    - not cliproxyapi_user_existed_before_apply
+
+- name: Create CLIProxyAPI installation and cache directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - path: "{{ cliproxyapi_install_root }}"
+      mode: "0755"
+    - path: "{{ cliproxyapi_release_root }}"
+      mode: "0755"
+    - path: "{{ cliproxyapi_release_directory }}"
+      mode: "0755"
+    - path: "{{ cliproxyapi_cache_directory }}"
+      mode: "0755"
+
+- name: Create protected CLIProxyAPI state directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ cliproxyapi_user }}"
+    group: "{{ cliproxyapi_group }}"
+    mode: "0700"
+  loop:
+    - "{{ cliproxyapi_state_directory }}"
+    - "{{ cliproxyapi_auth_directory }}"
+
+- name: Install the pinned CLIProxyAPI management panel
+  ansible.builtin.get_url:
+    url: "{{ cliproxyapi_management_panel_url }}"
+    dest: "{{ cliproxyapi_management_panel_path }}"
+    checksum: "{{ cliproxyapi_management_panel_checksum }}"
+    owner: "{{ cliproxyapi_user }}"
+    group: "{{ cliproxyapi_group }}"
+    mode: "0600"
+
+- name: Download the pinned plugin-free CLIProxyAPI release
+  ansible.builtin.get_url:
+    url: >-
+      https://github.com/router-for-me/CLIProxyAPI/releases/download/v{{ cliproxyapi_version }}/CLIProxyAPI_{{ cliproxyapi_version }}_linux_{{ cliproxyapi_release_architecture }}_no-plugin.tar.gz
+    dest: >-
+      {{ cliproxyapi_cache_directory }}/CLIProxyAPI_{{ cliproxyapi_version }}_linux_{{ cliproxyapi_release_architecture }}_no-plugin.tar.gz
+    checksum: "{{ cliproxyapi_release_checksum }}"
+    owner: root
+    group: root
+    mode: "0644"
+  register: cliproxyapi_release_archive
+
+- name: Extract the pinned CLIProxyAPI release
+  ansible.builtin.unarchive:
+    src: >-
+      {{ cliproxyapi_cache_directory }}/CLIProxyAPI_{{ cliproxyapi_version }}_linux_{{ cliproxyapi_release_architecture }}_no-plugin.tar.gz
+    dest: "{{ cliproxyapi_release_directory }}"
+    remote_src: true
+    creates: "{{ cliproxyapi_release_directory }}/cli-proxy-api"
+    owner: root
+    group: root
+  register: cliproxyapi_release_extract
+
+- name: Protect the installed CLIProxyAPI executable
+  ansible.builtin.file:
+    path: "{{ cliproxyapi_release_directory }}/cli-proxy-api"
+    state: file
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Activate the pinned CLIProxyAPI release
+  ansible.builtin.file:
+    src: "{{ cliproxyapi_release_directory }}"
+    dest: "{{ cliproxyapi_current_path }}"
+    state: link
+    owner: root
+    group: root
+    force: true
+  register: cliproxyapi_release_link
+
+- name: Render the protected CLIProxyAPI runtime configuration
+  ansible.builtin.set_fact:
+    cliproxyapi_runtime_secret_files:
+      - path: "{{ cliproxyapi_config_path }}"
+        group: "{{ cliproxyapi_group }}"
+        content: >-
+          {{ lookup('ansible.builtin.template', role_path ~ '/templates/config.yaml.j2') }}
+  no_log: true
+
+- name: Install the protected CLIProxyAPI runtime configuration
+  ansible.builtin.include_role:
+    name: runtime_secrets
+  vars:
+    runtime_secret_files: "{{ cliproxyapi_runtime_secret_files }}"
+  no_log: true
+
+- name: Install the hardened CLIProxyAPI systemd unit
+  ansible.builtin.template:
+    src: cliproxyapi.service.j2
+    dest: /etc/systemd/system/cliproxyapi.service
+    owner: root
+    group: root
+    mode: "0644"
+  register: cliproxyapi_systemd_unit
+
+- name: Enable and converge CLIProxyAPI
+  ansible.builtin.systemd_service:
+    name: cliproxyapi.service
+    enabled: true
+    daemon_reload: true
+    state: >-
+      {{ 'restarted'
+         if (cliproxyapi_release_extract.changed
+             or cliproxyapi_release_link.changed
+             or runtime_secret_install_results.changed
+             or cliproxyapi_systemd_unit.changed)
+         else 'started' }}
+
+- name: Wait for CLIProxyAPI on loopback
+  ansible.builtin.wait_for:
+    host: "{{ cliproxyapi_host }}"
+    port: "{{ cliproxyapi_port }}"
+    state: started
+    timeout: 30
+  when: not ansible_check_mode
+
+- name: Reject unauthenticated CLIProxyAPI requests
+  ansible.builtin.uri:
+    url: "http://{{ cliproxyapi_host }}:{{ cliproxyapi_port }}/v1/models"
+    method: GET
+    status_code:
+      - 401
+      - 403
+    return_content: false
+  when: not ansible_check_mode
+
+- name: Verify authenticated CLIProxyAPI model discovery
+  ansible.builtin.uri:
+    url: "http://{{ cliproxyapi_host }}:{{ cliproxyapi_port }}/v1/models"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ cliproxyapi_secrets.api_key }}"
+    status_code: 200
+    return_content: false
+  no_log: true
+  when: not ansible_check_mode
+
+- name: Verify the loopback-only management panel is available
+  ansible.builtin.uri:
+    url: >-
+      http://{{ cliproxyapi_host }}:{{ cliproxyapi_port }}/management.html
+    method: GET
+    status_code: 200
+    return_content: false
+  when: not ansible_check_mode
+
+- name: Verify the management API requires its key
+  ansible.builtin.uri:
+    url: >-
+      http://{{ cliproxyapi_host }}:{{ cliproxyapi_port }}/v0/management/config
+    method: GET
+    status_code:
+      - 401
+      - 403
+    return_content: false
+  when: not ansible_check_mode
+
+- name: Verify authenticated loopback management API access
+  ansible.builtin.uri:
+    url: >-
+      http://{{ cliproxyapi_host }}:{{ cliproxyapi_port }}/v0/management/config
+    method: GET
+    headers:
+      X-Management-Key: "{{ cliproxyapi_secrets.management_key }}"
+    status_code: 200
+    return_content: false
+  no_log: true
+  when: not ansible_check_mode
+
+- name: Read the active CLIProxyAPI listener
+  ansible.builtin.command:
+    argv:
+      - ss
+      - -H
+      - -lntp
+  register: cliproxyapi_active_listeners
+  check_mode: false
+  changed_when: false
+
+- name: Require a loopback-only CLIProxyAPI listener
+  ansible.builtin.assert:
+    that:
+      - >-
+        cliproxyapi_active_listeners.stdout
+        is regex('(?m)^LISTEN .*127\\.0\\.0\\.1:' ~ cliproxyapi_port ~ '\\s')
+      - >-
+        cliproxyapi_active_listeners.stdout
+        is not regex('(?m)^LISTEN .*0\\.0\\.0\\.0:' ~ cliproxyapi_port ~ '\\s')
+      - >-
+        cliproxyapi_active_listeners.stdout
+        is not regex('(?m)^LISTEN .*\\[::\\]:' ~ cliproxyapi_port ~ '\\s')
+    fail_msg: "Unexpected CLIProxyAPI listener: {{ cliproxyapi_active_listeners.stdout_lines }}"
+    quiet: true
+  when: not ansible_check_mode
+
+- name: Install the restricted CLIProxyAPI Caddy route
+  ansible.builtin.template:
+    src: 20-cliproxyapi.caddy.j2
+    dest: "{{ caddy_sites_directory }}/20-cliproxyapi.caddy"
+    owner: root
+    group: caddy
+    mode: "0640"
+  register: cliproxyapi_caddy_route
+
+- name: Require canonical formatting for the CLIProxyAPI Caddy route
+  ansible.builtin.command:
+    argv:
+      - caddy
+      - fmt
+      - --diff
+      - "{{ caddy_sites_directory }}/20-cliproxyapi.caddy"
+  become_user: caddy
+  check_mode: false
+  changed_when: false
+
+- name: Validate Caddy after adding the CLIProxyAPI route
+  ansible.builtin.command:
+    argv:
+      - caddy
+      - validate
+      - --config
+      - /etc/caddy/Caddyfile
+      - --adapter
+      - caddyfile
+  become_user: caddy
+  environment:
+    HOME: /var/lib/caddy
+    XDG_CONFIG_HOME: /var/lib/caddy/.config
+    XDG_DATA_HOME: /var/lib/caddy/.local/share
+  check_mode: false
+  changed_when: false
+
+- name: Gracefully activate the CLIProxyAPI Caddy route
+  ansible.builtin.systemd_service:
+    name: caddy.service
+    state: reloaded
+  when:
+    - cliproxyapi_caddy_route.changed
+    - not ansible_check_mode
+
+- name: Check that public management API access requires its key
+  ansible.builtin.command:
+    argv:
+      - curl
+      - --silent
+      - --show-error
+      - --output
+      - /dev/null
+      - --write-out
+      - "%{http_code}"
+      - --resolve
+      - "{{ cliproxyapi_domain }}:443:127.0.0.1"
+      - "https://{{ cliproxyapi_domain }}/v0/management/config"
+  register: cliproxyapi_public_management_response
+  check_mode: false
+  changed_when: false
+  failed_when: false
+  retries: 6
+  delay: 5
+  until: >-
+    cliproxyapi_public_management_response.stdout | trim in ['401', '403']
+  when: not ansible_check_mode
+
+- name: Check that the public management login page is available
+  ansible.builtin.command:
+    argv:
+      - curl
+      - --silent
+      - --show-error
+      - --output
+      - /dev/null
+      - --write-out
+      - "%{http_code}"
+      - --resolve
+      - "{{ cliproxyapi_domain }}:443:127.0.0.1"
+      - "https://{{ cliproxyapi_domain }}/management.html"
+  register: cliproxyapi_public_management_panel_response
+  check_mode: false
+  changed_when: false
+  failed_when: false
+  retries: 6
+  delay: 5
+  until: cliproxyapi_public_management_panel_response.stdout | trim == '200'
+  when: not ansible_check_mode
+
+- name: Verify authenticated public management API access
+  ansible.builtin.command:
+    argv:
+      - curl
+      - --silent
+      - --show-error
+      - --output
+      - /dev/null
+      - --write-out
+      - "%{http_code}"
+      - --config
+      - "-"
+      - --resolve
+      - "{{ cliproxyapi_domain }}:443:127.0.0.1"
+      - "https://{{ cliproxyapi_domain }}/v0/management/config"
+    stdin: |
+      header = "Authorization: Bearer {{ cliproxyapi_secrets.management_key }}"
+  register: cliproxyapi_authenticated_management_api_response
+  check_mode: false
+  changed_when: false
+  no_log: true
+  when: not ansible_check_mode
+
+- name: Check that Caddy preserves API authentication
+  ansible.builtin.command:
+    argv:
+      - curl
+      - --silent
+      - --show-error
+      - --output
+      - /dev/null
+      - --write-out
+      - "%{http_code}"
+      - --resolve
+      - "{{ cliproxyapi_domain }}:443:127.0.0.1"
+      - "https://{{ cliproxyapi_domain }}/v1/models"
+  register: cliproxyapi_public_api_response
+  check_mode: false
+  changed_when: false
+  failed_when: false
+  retries: 6
+  delay: 5
+  until: >-
+    cliproxyapi_public_api_response.stdout | trim in ['401', '403']
+  when: not ansible_check_mode
+
+- name: Require the reviewed public CLIProxyAPI surface
+  ansible.builtin.assert:
+    that:
+      - >-
+        cliproxyapi_public_management_response.stdout | trim in ['401', '403']
+      - cliproxyapi_public_management_panel_response.stdout | trim == '200'
+      - >-
+        cliproxyapi_authenticated_management_api_response.stdout | trim == '200'
+      - cliproxyapi_public_api_response.stdout | trim in ['401', '403']
+    fail_msg: >-
+      The public route did not enforce management and API authentication.
+    quiet: true
+  when: not ansible_check_mode

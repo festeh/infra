@@ -1,0 +1,109 @@
+# Managed by Ansible. This file contains credentials; do not copy or log it.
+host: {{ cliproxyapi_host | to_json }}
+port: {{ cliproxyapi_port }}
+
+tls:
+  enable: false
+
+remote-management:
+  # Caddy is the only remote entry point; the service remains loopback-only.
+  allow-remote: true
+  secret-key: {{ cliproxyapi_secrets.management_key | to_json }}
+  disable-control-panel: false
+  disable-auto-update-panel: true
+
+auth-dir: {{ cliproxyapi_auth_directory | to_json }}
+
+api-keys:
+  - {{ cliproxyapi_secrets.api_key | to_json }}
+
+debug: false
+
+pprof:
+  enable: false
+  addr: "127.0.0.1:8316"
+
+plugins:
+  enabled: false
+  dir: {{ (cliproxyapi_state_directory ~ '/plugins') | to_json }}
+  configs: {}
+
+commercial-mode: false
+logging-to-file: false
+logs-max-total-size-mb: 0
+error-logs-max-files: 10
+usage-statistics-enabled: false
+redis-usage-queue-retention-seconds: 60
+
+proxy-url: ""
+force-model-prefix: false
+passthrough-headers: false
+request-retry: 3
+max-retry-credentials: 1
+max-retry-interval: 30
+disable-cooling: false
+save-cooldown-status: false
+
+quota-exceeded:
+  switch-project: false
+  switch-preview-model: false
+  antigravity-credits: false
+
+routing:
+  strategy: "fill-first"
+  session-affinity: false
+
+ws-auth: true
+nonstream-keepalive-interval: 15
+
+streaming:
+  keepalive-seconds: 15
+  bootstrap-retries: 1
+
+# Kimi For Coding accepts only temperature=1. Override incompatible client
+# values as well as filling omitted values so generic OpenAI clients work.
+payload:
+  override:
+    - models:
+        - name: "kimi-for-coding"
+      params:
+        temperature: 1
+
+openai-compatibility:
+  - name: "openrouter"
+    base-url: "https://openrouter.ai/api/v1"
+    api-key-entries:
+      - api-key: {{ cliproxyapi_secrets.providers.openrouter | to_json }}
+    models:
+{% for model in cliproxyapi_models.openrouter %}
+      - name: {{ model | to_json }}
+{% endfor %}
+
+  - name: "groq"
+    base-url: "https://api.groq.com/openai/v1"
+    api-key-entries:
+      - api-key: {{ cliproxyapi_secrets.providers.groq | to_json }}
+    models:
+{% for model in cliproxyapi_models.groq %}
+      - name: {{ model | to_json }}
+{% endfor %}
+
+  - name: "gemini"
+    base-url: "https://generativelanguage.googleapis.com/v1beta/openai"
+    api-key-entries:
+      - api-key: {{ cliproxyapi_secrets.providers.gemini | to_json }}
+    models:
+{% for model in cliproxyapi_models.gemini %}
+      - name: {{ model | to_json }}
+{% endfor %}
+
+  - name: "kimi"
+    base-url: "https://api.kimi.com/coding/v1"
+    api-key-entries:
+      - api-key: {{ cliproxyapi_secrets.providers.kimi | to_json }}
+    models:
+{% for model in cliproxyapi_models.kimi %}
+      - name: {{ model | to_json }}
+{% endfor %}
+      - name: "kimi-for-coding"
+        alias: "default"

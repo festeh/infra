@@ -1,0 +1,139 @@
+---
+- name: Read installed package facts
+  ansible.builtin.package_facts:
+    manager: auto
+
+- name: Record whether PostgreSQL was installed before this run
+  ansible.builtin.set_fact:
+    postgresql_installed_before_apply: "{{ 'postgresql' in ansible_facts.packages }}"
+
+- name: Install PostgreSQL
+  ansible.builtin.apt:
+    name: "{{ postgresql_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Defer PostgreSQL configuration during its first check-mode run
+  ansible.builtin.meta: end_role
+  when:
+    - ansible_check_mode
+    - not postgresql_installed_before_apply
+
+- name: Read PostgreSQL clusters
+  ansible.builtin.command:
+    argv:
+      - pg_lsclusters
+      - --no-header
+  environment:
+    LC_ALL: C
+  register: postgresql_clusters
+  check_mode: false
+  changed_when: false
+
+- name: Require exactly one main PostgreSQL cluster
+  ansible.builtin.assert:
+    that:
+      - postgresql_clusters.stdout_lines | length == 1
+      - postgresql_clusters.stdout_lines[0].split() | length >= 6
+      - postgresql_clusters.stdout_lines[0].split()[1] == postgresql_cluster_name
+      - postgresql_clusters.stdout_lines[0].split()[2] | int == postgresql_port
+    fail_msg: >-
+      Expected exactly one PostgreSQL cluster named {{ postgresql_cluster_name }}
+      on port {{ postgresql_port }}; found: {{ postgresql_clusters.stdout_lines }}
+    quiet: true
+
+- name: Record the PostgreSQL cluster version
+  ansible.builtin.set_fact:
+    postgresql_cluster_version: "{{ postgresql_clusters.stdout_lines[0].split()[0] }}"
+
+- name: Restrict PostgreSQL to loopback interfaces
+  ansible.builtin.lineinfile:
+    path: "/etc/postgresql/{{ postgresql_cluster_version }}/{{ postgresql_cluster_name }}/postgresql.conf"
+    regexp: '^\s*#?\s*listen_addresses\s*='
+    line: "listen_addresses = '{{ postgresql_listen_addresses }}'"
+  notify: Restart PostgreSQL cluster
+
+- name: Require SCRAM for new PostgreSQL passwords
+  ansible.builtin.lineinfile:
+    path: "/etc/postgresql/{{ postgresql_cluster_version }}/{{ postgresql_cluster_name }}/postgresql.conf"
+    regexp: '^\s*#?\s*password_encryption\s*='
+    line: "password_encryption = 'scram-sha-256'"
+  notify: Restart PostgreSQL cluster
+
+- name: Install the PostgreSQL client authentication policy
+  ansible.builtin.template:
+    src: pg_hba.conf.j2
+    dest: "/etc/postgresql/{{ postgresql_cluster_version }}/{{ postgresql_cluster_name }}/pg_hba.conf"
+    owner: postgres
+    group: postgres
+    mode: "0640"
+  notify: Restart PostgreSQL cluster
+
+- name: Enable and start PostgreSQL
+  ansible.builtin.systemd_service:
+    name: postgresql
+    enabled: true
+    state: started
+
+- name: Apply PostgreSQL configuration changes before verification
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait for PostgreSQL on IPv4 loopback
+  ansible.builtin.command:
+    argv:
+      - pg_isready
+      - --host=127.0.0.1
+      - "--port={{ postgresql_port }}"
+  register: postgresql_ipv4_readiness
+  check_mode: false
+  changed_when: false
+  retries: 10
+  delay: 1
+  until: postgresql_ipv4_readiness.rc == 0
+
+- name: Wait for PostgreSQL on IPv6 loopback
+  ansible.builtin.command:
+    argv:
+      - pg_isready
+      - --host=::1
+      - "--port={{ postgresql_port }}"
+  register: postgresql_ipv6_readiness
+  check_mode: false
+  changed_when: false
+  retries: 10
+  delay: 1
+  until: postgresql_ipv6_readiness.rc == 0
+
+- name: Read the effective PostgreSQL listen addresses
+  ansible.builtin.command:
+    argv:
+      - psql
+      - --no-psqlrc
+      - --tuples-only
+      - --no-align
+      - --command=SHOW listen_addresses
+  become_user: postgres
+  register: postgresql_effective_listen_addresses
+  check_mode: false
+  changed_when: false
+
+- name: Read the effective PostgreSQL password encryption
+  ansible.builtin.command:
+    argv:
+      - psql
+      - --no-psqlrc
+      - --tuples-only
+      - --no-align
+      - --command=SHOW password_encryption
+  become_user: postgres
+  register: postgresql_effective_password_encryption
+  check_mode: false
+  changed_when: false
+
+- name: Require the hardened PostgreSQL settings
+  ansible.builtin.assert:
+    that:
+      - postgresql_effective_listen_addresses.stdout | trim == postgresql_listen_addresses
+      - postgresql_effective_password_encryption.stdout | trim == 'scram-sha-256'
+    quiet: true

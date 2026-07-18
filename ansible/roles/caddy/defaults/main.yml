@@ -1,0 +1,19 @@
+---
+caddy_repository_key_url: https://dl.cloudsmith.io/public/caddy/stable/gpg.key
+caddy_repository_key_path: /usr/share/keyrings/caddy-stable-archive-keyring.asc
+caddy_repository_key_checksum: sha256:783dfee04b19e851a928cd87b34710213ebbe7628f98d9f34595ab83be578c00
+caddy_repository_key_fingerprint: 65760C51EDEA2017CEA2CA15155B6D79CA56EA34
+caddy_repository_url: https://dl.cloudsmith.io/public/caddy/stable/deb/debian
+caddy_repository_suite: any-version
+caddy_repository_file: /etc/apt/sources.list.d/caddy-stable.sources
+
+caddy_minimum_version: 2.10.0
+caddy_admin_address: 127.0.0.1:2019
+caddy_sites_directory: /etc/caddy/sites-enabled
+
+caddy_access_log_path: /var/log/caddy/access.log
+caddy_access_log_mode: "0640"
+caddy_access_log_roll_size: 25MiB
+caddy_access_log_roll_at: "00:00"
+caddy_access_log_roll_keep: 40
+caddy_access_log_roll_keep_for: 720h

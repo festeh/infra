@@ -1,0 +1,9 @@
+---
+postgresql_packages:
+  - postgresql
+  - postgresql-client
+  - python3-psycopg
+
+postgresql_cluster_name: main
+postgresql_port: 5432
+postgresql_listen_addresses: "127.0.0.1,::1"

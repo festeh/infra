@@ -1,0 +1,44 @@
+# Managed by Ansible. Application routes are imported from sites-enabled.
+{
+	admin {{ caddy_admin_address }}
+	persist_config off
+
+	# A local fallback certificate lets the deny-by-default HTTPS listener log
+	# unknown hosts without making the internal issuer apply to real domains.
+	default_sni localhost
+	fallback_sni localhost
+	skip_install_trust
+
+	# HTTP/3 would add a public UDP/443 listener. Keep the reviewed edge surface
+	# to TCP/80 and TCP/443 until there is a concrete need for QUIC.
+	servers {
+		protocols h1 h2
+	}
+
+	log access {
+		output file {{ caddy_access_log_path }} {
+			mode {{ caddy_access_log_mode }}
+			roll_size {{ caddy_access_log_roll_size }}
+			roll_at {{ caddy_access_log_roll_at }}
+			roll_keep {{ caddy_access_log_roll_keep }}
+			roll_keep_for {{ caddy_access_log_roll_keep_for }}
+		}
+		format filter {
+			# Query parameters may contain OAuth codes or API credentials.
+			request>uri regexp \?.*$ ?REDACTED
+			# CLIProxyAPI also accepts this non-standard credential header.
+			request>headers>X-Management-Key delete
+			wrap json
+		}
+	}
+}
+
+(infra_site) {
+	log access
+	header {
+		-Server
+		X-Content-Type-Options nosniff
+	}
+}
+
+import {{ caddy_sites_directory }}/*.caddy

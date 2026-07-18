@@ -1,0 +1,46 @@
+---
+miniflux_version: "2.3.2"
+miniflux_release_architectures:
+  x86_64: amd64
+  aarch64: arm64
+miniflux_release_checksums:
+  x86_64: sha256:42db4484d87d045a3e2f99f90d211a210ea3d623a5f08dffa81ffb4dc9467f69
+  aarch64: sha256:c79814365cfcaa8062c28e2d4ce66a275bd388d98e970ae021ffb4cfe2c84b25
+
+miniflux_user: miniflux
+miniflux_group: miniflux
+miniflux_host: 127.0.0.1
+miniflux_port: 8085
+miniflux_domain: rss.dimalip.in
+
+miniflux_install_root: /opt/miniflux
+miniflux_release_root: "{{ miniflux_install_root }}/releases"
+miniflux_release_directory: "{{ miniflux_release_root }}/{{ miniflux_version }}"
+miniflux_current_path: "{{ miniflux_install_root }}/current"
+miniflux_binary_path: "{{ miniflux_current_path }}/miniflux"
+miniflux_cache_directory: /var/cache/miniflux
+miniflux_config_directory: /etc/miniflux
+miniflux_config_path: "{{ miniflux_config_directory }}/miniflux.conf"
+miniflux_state_directory: /var/lib/miniflux
+
+miniflux_db_name: miniflux
+miniflux_db_user: miniflux
+miniflux_db_host: 127.0.0.1
+miniflux_db_port: 5432
+miniflux_admin_username: admin
+miniflux_admin_theme: dark_sans_serif
+
+miniflux_polling_frequency_minutes: 60
+miniflux_worker_pool_size: 10
+miniflux_http_client_timeout_seconds: 2400
+miniflux_max_tolerated_feed_errors: 3
+
+miniflux_feeds:
+  - name: The Rundown AI
+    url: https://rss.beehiiv.com/feeds/2R3C6Bt5wj.xml
+  - name: Ben's Bites
+    url: https://kill-the-newsletter.com/feeds/zfgn5ml3cwlkndk479q8.xml
+  - name: The Sequence
+    url: https://kill-the-newsletter.com/feeds/cd8szgcslg0bka8yek6f.xml
+miniflux_bens_bites_feed_url: >-
+  https://kill-the-newsletter.com/feeds/zfgn5ml3cwlkndk479q8.xml

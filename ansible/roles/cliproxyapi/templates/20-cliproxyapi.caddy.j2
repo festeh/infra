@@ -1,0 +1,30 @@
+# Managed by Ansible. Only the reviewed routes and authenticated APIs are public.
+{{ cliproxyapi_domain }} {
+	import infra_site
+
+	@management_panel path /management.html
+	handle @management_panel {
+		header {
+			Cache-Control "no-store"
+			Referrer-Policy "no-referrer"
+			X-Frame-Options "DENY"
+		}
+		reverse_proxy {{ cliproxyapi_host }}:{{ cliproxyapi_port }}
+	}
+
+	# The panel sends its separate management key as an Authorization bearer.
+	@management_api path /v0/management /v0/management/*
+	handle @management_api {
+		header Cache-Control "no-store"
+		reverse_proxy {{ cliproxyapi_host }}:{{ cliproxyapi_port }}
+	}
+
+	@openai_api path /v1 /v1/*
+	handle @openai_api {
+		reverse_proxy {{ cliproxyapi_host }}:{{ cliproxyapi_port }}
+	}
+
+	handle {
+		respond 404
+	}
+}

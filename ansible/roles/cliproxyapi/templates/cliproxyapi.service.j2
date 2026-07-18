@@ -1,0 +1,52 @@
+[Unit]
+Description=CLIProxyAPI model gateway
+Documentation=https://github.com/router-for-me/CLIProxyAPI
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User={{ cliproxyapi_user }}
+Group={{ cliproxyapi_group }}
+WorkingDirectory={{ cliproxyapi_state_directory }}
+Environment=HOME={{ cliproxyapi_state_directory }}
+Environment=MANAGEMENT_STATIC_PATH={{ cliproxyapi_management_panel_path }}
+ExecStart={{ cliproxyapi_binary_path }} -config {{ cliproxyapi_config_path }}
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+UMask=0077
+LimitNOFILE=65536
+TasksMax=256
+MemoryMax=1G
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cliproxyapi
+
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectHostname=true
+ProtectClock=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectProc=invisible
+ProcSubset=pid
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RemoveIPC=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadOnlyPaths={{ cliproxyapi_install_root }} {{ cliproxyapi_config_directory }}
+ReadWritePaths={{ cliproxyapi_state_directory }}
+
+[Install]
+WantedBy=multi-user.target

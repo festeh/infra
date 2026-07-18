@@ -1,0 +1,647 @@
+---
+- name: Select the reviewed Miniflux release for this architecture
+  ansible.builtin.set_fact:
+    miniflux_release_architecture: >-
+      {{ miniflux_release_architectures.get(ansible_facts['architecture'], '') }}
+    miniflux_release_checksum: >-
+      {{ miniflux_release_checksums.get(ansible_facts['architecture'], '') }}
+
+- name: Require a reviewed Miniflux release artifact
+  ansible.builtin.assert:
+    that:
+      - miniflux_release_architecture | length > 0
+      - miniflux_release_checksum is match('^sha256:[0-9a-f]{64}$')
+    fail_msg: >-
+      No pinned Miniflux {{ miniflux_version }} artifact exists for
+      {{ ansible_facts['architecture'] }}.
+    quiet: true
+
+- name: Load the encrypted Miniflux secret mapping
+  ansible.builtin.set_fact:
+    miniflux_secrets: >-
+      {{ (vault_service_secrets | default({})).get('miniflux', {}) }}
+  no_log: true
+
+- name: Require complete, distinct Miniflux credentials
+  ansible.builtin.assert:
+    that:
+      - miniflux_secrets is mapping
+      - miniflux_secrets.get('db_password', '') | length >= 32
+      - miniflux_secrets.get('admin_password', '') | length >= 32
+      - miniflux_secrets.db_password != miniflux_secrets.admin_password
+      - miniflux_admin_username | length > 0
+      - >-
+        miniflux_admin_theme in
+        [
+          'light_serif',
+          'light_sans_serif',
+          'dark_serif',
+          'dark_sans_serif',
+          'system_serif',
+          'system_sans_serif'
+        ]
+      - miniflux_feeds | length > 0
+      - >-
+        miniflux_feeds
+        | map(attribute='url')
+        | select('match', '^https://')
+        | list
+        | length == miniflux_feeds | length
+    fail_msg: >-
+      The encrypted Miniflux credential set, administrator preference, or feed
+      declaration is invalid.
+    quiet: true
+  no_log: true
+
+- name: Check whether the Miniflux service account already exists
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ miniflux_user }}"
+    fail_key: false
+  check_mode: false
+  changed_when: false
+
+- name: Record whether Miniflux existed before this run
+  ansible.builtin.set_fact:
+    miniflux_user_existed_before_apply: >-
+      {{ ansible_facts.getent_passwd.get(miniflux_user) is not none }}
+
+- name: Create the Miniflux system group
+  ansible.builtin.group:
+    name: "{{ miniflux_group }}"
+    system: true
+
+- name: Create the unprivileged Miniflux service account
+  ansible.builtin.user:
+    name: "{{ miniflux_user }}"
+    group: "{{ miniflux_group }}"
+    home: "{{ miniflux_state_directory }}"
+    shell: /usr/sbin/nologin
+    system: true
+    create_home: false
+    password_lock: true
+
+- name: Defer a first-time Miniflux installation during check mode
+  ansible.builtin.meta: end_role
+  when:
+    - ansible_check_mode
+    - not miniflux_user_existed_before_apply
+
+- name: Ensure the restricted Miniflux PostgreSQL role exists
+  community.postgresql.postgresql_user:
+    name: "{{ miniflux_db_user }}"
+    role_attr_flags: LOGIN,NOSUPERUSER,NOCREATEDB,NOCREATEROLE,NOREPLICATION
+    state: present
+  become_user: postgres
+
+- name: Check the desired Miniflux PostgreSQL credential
+  ansible.builtin.command:
+    argv:
+      - psql
+      - --no-psqlrc
+      - "--host={{ miniflux_db_host }}"
+      - "--port={{ miniflux_db_port }}"
+      - "--username={{ miniflux_db_user }}"
+      - --dbname=postgres
+      - --tuples-only
+      - --no-align
+      - --command=SELECT 1
+  environment:
+    PGPASSWORD: "{{ miniflux_secrets.db_password }}"
+  register: miniflux_db_credential_check
+  check_mode: false
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: Set the Miniflux PostgreSQL credential when required
+  community.postgresql.postgresql_user:
+    name: "{{ miniflux_db_user }}"
+    password: "{{ miniflux_secrets.db_password }}"
+    encrypted: true
+    role_attr_flags: LOGIN,NOSUPERUSER,NOCREATEDB,NOCREATEROLE,NOREPLICATION
+    state: present
+  become_user: postgres
+  when: miniflux_db_credential_check.rc != 0
+  no_log: true
+
+- name: Create the Miniflux database
+  community.postgresql.postgresql_db:
+    name: "{{ miniflux_db_name }}"
+    owner: "{{ miniflux_db_user }}"
+    encoding: UTF8
+    template: template0
+    state: present
+  become_user: postgres
+
+- name: Check for the obsolete Miniflux hstore extension
+  ansible.builtin.command:
+    argv:
+      - psql
+      - --no-psqlrc
+      - --dbname={{ miniflux_db_name }}
+      - --tuples-only
+      - --no-align
+      - --command=SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'hstore')
+  become_user: postgres
+  register: miniflux_hstore_extension
+  check_mode: false
+  changed_when: false
+
+- name: Check whether the Miniflux unit is already installed
+  ansible.builtin.stat:
+    path: /etc/systemd/system/miniflux.service
+  register: miniflux_installed_unit
+
+- name: Stop Miniflux before removing its obsolete extension
+  ansible.builtin.systemd_service:
+    name: miniflux.service
+    state: stopped
+  when:
+    - miniflux_hstore_extension.stdout | trim == 't'
+    - miniflux_installed_unit.stat.exists
+    - not ansible_check_mode
+
+- name: Remove the obsolete Miniflux hstore extension
+  community.postgresql.postgresql_ext:
+    name: hstore
+    login_db: "{{ miniflux_db_name }}"
+    state: absent
+  become_user: postgres
+
+- name: Read the Miniflux PostgreSQL security attributes
+  ansible.builtin.command:
+    argv:
+      - psql
+      - --no-psqlrc
+      - --tuples-only
+      - --no-align
+      - >-
+        --command=SELECT rolcanlogin, rolsuper, rolcreatedb, rolcreaterole,
+        rolreplication FROM pg_roles WHERE rolname = '{{ miniflux_db_user }}'
+  become_user: postgres
+  register: miniflux_db_role_attributes
+  check_mode: false
+  changed_when: false
+
+- name: Require a non-privileged Miniflux PostgreSQL login
+  ansible.builtin.assert:
+    that:
+      - miniflux_db_role_attributes.stdout | trim == 't|f|f|f|f'
+    fail_msg: >-
+      The Miniflux PostgreSQL role has unexpected elevated privileges.
+    quiet: true
+
+- name: Create Miniflux installation directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - path: "{{ miniflux_install_root }}"
+      mode: "0755"
+    - path: "{{ miniflux_release_root }}"
+      mode: "0755"
+    - path: "{{ miniflux_release_directory }}"
+      mode: "0755"
+    - path: "{{ miniflux_cache_directory }}"
+      mode: "0755"
+
+- name: Create the protected Miniflux state directory
+  ansible.builtin.file:
+    path: "{{ miniflux_state_directory }}"
+    state: directory
+    owner: "{{ miniflux_user }}"
+    group: "{{ miniflux_group }}"
+    mode: "0700"
+
+- name: Download the checksum-pinned Miniflux release
+  ansible.builtin.get_url:
+    url: >-
+      https://github.com/miniflux/v2/releases/download/{{ miniflux_version }}/miniflux-linux-{{ miniflux_release_architecture }}
+    dest: "{{ miniflux_release_directory }}/miniflux"
+    checksum: "{{ miniflux_release_checksum }}"
+    owner: root
+    group: root
+    mode: "0755"
+  register: miniflux_release_binary
+
+- name: Activate the pinned Miniflux release
+  ansible.builtin.file:
+    src: "{{ miniflux_release_directory }}"
+    dest: "{{ miniflux_current_path }}"
+    state: link
+    owner: root
+    group: root
+    force: true
+  register: miniflux_release_link
+
+- name: Read the installed Miniflux version
+  ansible.builtin.command:
+    argv:
+      - "{{ miniflux_binary_path }}"
+      - -version
+  register: miniflux_installed_version
+  check_mode: false
+  changed_when: false
+
+- name: Require the pinned Miniflux version
+  ansible.builtin.assert:
+    that:
+      - miniflux_version in miniflux_installed_version.stdout
+    fail_msg: >-
+      Expected Miniflux {{ miniflux_version }}, received
+      {{ miniflux_installed_version.stdout | trim }}.
+    quiet: true
+
+- name: Render the protected Miniflux runtime configuration
+  ansible.builtin.set_fact:
+    miniflux_runtime_secret_files:
+      - path: "{{ miniflux_config_path }}"
+        group: "{{ miniflux_group }}"
+        content: >-
+          {{ lookup('ansible.builtin.template', role_path ~ '/templates/miniflux.conf.j2') }}
+  no_log: true
+
+- name: Install the protected Miniflux runtime configuration
+  ansible.builtin.include_role:
+    name: runtime_secrets
+  vars:
+    runtime_secret_files: "{{ miniflux_runtime_secret_files }}"
+  no_log: true
+
+- name: Install the hardened Miniflux systemd unit
+  ansible.builtin.template:
+    src: miniflux.service.j2
+    dest: /etc/systemd/system/miniflux.service
+    owner: root
+    group: root
+    mode: "0644"
+  register: miniflux_systemd_unit
+
+- name: Enable and converge Miniflux
+  ansible.builtin.systemd_service:
+    name: miniflux.service
+    enabled: true
+    daemon_reload: true
+    state: >-
+      {{ 'restarted'
+         if (miniflux_release_binary.changed
+             or miniflux_release_link.changed
+             or runtime_secret_install_results.changed
+             or miniflux_systemd_unit.changed)
+         else 'started' }}
+
+- name: Wait for Miniflux on loopback
+  ansible.builtin.uri:
+    url: "http://{{ miniflux_host }}:{{ miniflux_port }}/healthcheck"
+    method: GET
+    status_code: 200
+    return_content: false
+  register: miniflux_healthcheck
+  retries: 15
+  delay: 2
+  until: miniflux_healthcheck.status == 200
+  when: not ansible_check_mode
+
+- name: Verify the Miniflux API requires authentication
+  ansible.builtin.uri:
+    url: "http://{{ miniflux_host }}:{{ miniflux_port }}/v1/me"
+    method: GET
+    status_code:
+      - 401
+      - 403
+    return_content: false
+  when: not ansible_check_mode
+
+- name: Read the authenticated Miniflux account
+  ansible.builtin.uri:
+    url: "http://{{ miniflux_host }}:{{ miniflux_port }}/v1/me"
+    method: GET
+    url_username: "{{ miniflux_admin_username }}"
+    url_password: "{{ miniflux_secrets.admin_password }}"
+    force_basic_auth: true
+    status_code: 200
+    return_content: true
+  register: miniflux_current_account
+  no_log: true
+  when: not ansible_check_mode
+
+- name: Converge the Miniflux administrator theme
+  ansible.builtin.uri:
+    url: "http://{{ miniflux_host }}:{{ miniflux_port }}/v1/users/{{ miniflux_current_account.json.id }}"
+    method: PUT
+    url_username: "{{ miniflux_admin_username }}"
+    url_password: "{{ miniflux_secrets.admin_password }}"
+    force_basic_auth: true
+    body_format: json
+    body:
+      theme: "{{ miniflux_admin_theme }}"
+    status_code:
+      - 200
+      - 201
+      - 204
+    return_content: false
+  no_log: true
+  when:
+    - not ansible_check_mode
+    - miniflux_current_account.json.theme != miniflux_admin_theme
+
+- name: Read the converged Miniflux administrator preferences
+  ansible.builtin.uri:
+    url: "http://{{ miniflux_host }}:{{ miniflux_port }}/v1/me"
+    method: GET
+    url_username: "{{ miniflux_admin_username }}"
+    url_password: "{{ miniflux_secrets.admin_password }}"
+    force_basic_auth: true
+    status_code: 200
+    return_content: true
+  register: miniflux_converged_account
+  no_log: true
+  when: not ansible_check_mode
+
+- name: Require the declared Miniflux administrator preferences
+  ansible.builtin.assert:
+    that:
+      - miniflux_converged_account.json.username == miniflux_admin_username
+      - miniflux_converged_account.json.is_admin | bool
+      - miniflux_converged_account.json.theme == miniflux_admin_theme
+    fail_msg: The Miniflux administrator preferences do not match the declaration.
+    quiet: true
+  no_log: true
+  when: not ansible_check_mode
+
+- name: Read existing Miniflux feeds
+  ansible.builtin.uri:
+    url: "http://{{ miniflux_host }}:{{ miniflux_port }}/v1/feeds"
+    method: GET
+    url_username: "{{ miniflux_admin_username }}"
+    url_password: "{{ miniflux_secrets.admin_password }}"
+    force_basic_auth: true
+    status_code: 200
+    return_content: true
+  register: miniflux_existing_feeds
+  no_log: true
+  when: not ansible_check_mode
+
+- name: Subscribe to missing managed feeds
+  ansible.builtin.uri:
+    url: "http://{{ miniflux_host }}:{{ miniflux_port }}/v1/feeds"
+    method: POST
+    url_username: "{{ miniflux_admin_username }}"
+    url_password: "{{ miniflux_secrets.admin_password }}"
+    force_basic_auth: true
+    body_format: json
+    body:
+      feed_url: "{{ item.url }}"
+    status_code: 201
+    return_content: true
+    timeout: "{{ miniflux_http_client_timeout_seconds + 15 }}"
+  loop: "{{ miniflux_feeds }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - not ansible_check_mode
+    - >-
+      item.url not in
+      (miniflux_existing_feeds.json | map(attribute='feed_url') | list)
+  no_log: true
+
+- name: Read the converged Miniflux feed list
+  ansible.builtin.uri:
+    url: "http://{{ miniflux_host }}:{{ miniflux_port }}/v1/feeds"
+    method: GET
+    url_username: "{{ miniflux_admin_username }}"
+    url_password: "{{ miniflux_secrets.admin_password }}"
+    force_basic_auth: true
+    status_code: 200
+    return_content: true
+  register: miniflux_managed_feeds
+  no_log: true
+  when: not ansible_check_mode
+
+- name: Require every declared Miniflux feed
+  ansible.builtin.assert:
+    that:
+      - >-
+        miniflux_feeds
+        | map(attribute='url')
+        | difference(miniflux_managed_feeds.json | map(attribute='feed_url') | list)
+        | length == 0
+    fail_msg: One or more declared Miniflux feeds were not subscribed.
+    quiet: true
+  no_log: true
+  when: not ansible_check_mode
+
+- name: Select the Ben's Bites feed
+  ansible.builtin.set_fact:
+    miniflux_bens_bites_feed: >-
+      {{ miniflux_managed_feeds.json
+         | selectattr('feed_url', 'equalto', miniflux_bens_bites_feed_url)
+         | first }}
+  no_log: true
+  when: not ansible_check_mode
+
+- name: Read the Ben's Bites feed status
+  ansible.builtin.uri:
+    url: >-
+      http://{{ miniflux_host }}:{{ miniflux_port }}/v1/feeds/{{ miniflux_bens_bites_feed.id }}
+    method: GET
+    url_username: "{{ miniflux_admin_username }}"
+    url_password: "{{ miniflux_secrets.admin_password }}"
+    force_basic_auth: true
+    status_code: 200
+    return_content: true
+  register: miniflux_bens_bites_status
+  no_log: true
+  when: not ansible_check_mode
+
+- name: Read imported Ben's Bites entries
+  ansible.builtin.uri:
+    url: >-
+      http://{{ miniflux_host }}:{{ miniflux_port }}/v1/feeds/{{ miniflux_bens_bites_feed.id }}/entries?limit=10&order=published_at&direction=desc
+    method: GET
+    url_username: "{{ miniflux_admin_username }}"
+    url_password: "{{ miniflux_secrets.admin_password }}"
+    force_basic_auth: true
+    status_code: 200
+    return_content: true
+  register: miniflux_bens_bites_entries
+  no_log: true
+  when: not ansible_check_mode
+
+- name: Report a transient Ben's Bites fetch failure
+  ansible.builtin.debug:
+    msg: >-
+      Ben's Bites has {{ miniflux_bens_bites_status.json.parsing_error_count }}
+      consecutive fetch error(s); Miniflux will retry on its managed schedule.
+  when:
+    - not ansible_check_mode
+    - miniflux_bens_bites_status.json.parsing_error_count | int > 0
+
+- name: Require available Ben's Bites history
+  ansible.builtin.assert:
+    that:
+      - >-
+        miniflux_bens_bites_status.json.parsing_error_count | int
+        <= miniflux_max_tolerated_feed_errors
+      - not miniflux_bens_bites_status.json.disabled
+      - miniflux_bens_bites_status.json.checked_at | length > 0
+      - miniflux_bens_bites_entries.json.total | int > 0
+      - miniflux_bens_bites_entries.json.entries | length > 0
+      - miniflux_bens_bites_entries.json.entries[0].title | length > 0
+    fail_msg: Ben's Bites did not refresh and import successfully.
+    quiet: true
+  no_log: true
+  when: not ansible_check_mode
+
+- name: Read the active Miniflux listener
+  ansible.builtin.command:
+    argv:
+      - ss
+      - -H
+      - -lntp
+  register: miniflux_active_listeners
+  check_mode: false
+  changed_when: false
+
+- name: Require a loopback-only Miniflux listener
+  ansible.builtin.assert:
+    that:
+      - >-
+        miniflux_active_listeners.stdout
+        is regex('(?m)^LISTEN .*127\\.0\\.0\\.1:' ~ miniflux_port ~ '\\s')
+      - >-
+        miniflux_active_listeners.stdout
+        is not regex('(?m)^LISTEN .*0\\.0\\.0\\.0:' ~ miniflux_port ~ '\\s')
+      - >-
+        miniflux_active_listeners.stdout
+        is not regex('(?m)^LISTEN .*\\[::\\]:' ~ miniflux_port ~ '\\s')
+    fail_msg: "Unexpected Miniflux listener: {{ miniflux_active_listeners.stdout_lines }}"
+    quiet: true
+  when: not ansible_check_mode
+
+- name: Install the Miniflux Caddy route
+  ansible.builtin.template:
+    src: 30-miniflux.caddy.j2
+    dest: "{{ caddy_sites_directory }}/30-miniflux.caddy"
+    owner: root
+    group: caddy
+    mode: "0640"
+  register: miniflux_caddy_route
+
+- name: Require canonical formatting for the Miniflux Caddy route
+  ansible.builtin.command:
+    argv:
+      - caddy
+      - fmt
+      - --diff
+      - "{{ caddy_sites_directory }}/30-miniflux.caddy"
+  become_user: caddy
+  check_mode: false
+  changed_when: false
+
+- name: Validate Caddy after adding the Miniflux route
+  ansible.builtin.command:
+    argv:
+      - caddy
+      - validate
+      - --config
+      - /etc/caddy/Caddyfile
+      - --adapter
+      - caddyfile
+  become_user: caddy
+  environment:
+    HOME: /var/lib/caddy
+    XDG_CONFIG_HOME: /var/lib/caddy/.config
+    XDG_DATA_HOME: /var/lib/caddy/.local/share
+  check_mode: false
+  changed_when: false
+
+- name: Gracefully activate the Miniflux Caddy route
+  ansible.builtin.systemd_service:
+    name: caddy.service
+    state: reloaded
+  when:
+    - miniflux_caddy_route.changed
+    - not ansible_check_mode
+
+- name: Check the public Miniflux health endpoint
+  ansible.builtin.command:
+    argv:
+      - curl
+      - --silent
+      - --show-error
+      - --output
+      - /dev/null
+      - --write-out
+      - "%{http_code}"
+      - --resolve
+      - "{{ miniflux_domain }}:443:127.0.0.1"
+      - "https://{{ miniflux_domain }}/healthcheck"
+  register: miniflux_public_health_response
+  check_mode: false
+  changed_when: false
+  failed_when: false
+  retries: 12
+  delay: 5
+  until: miniflux_public_health_response.stdout | trim == '200'
+  when: not ansible_check_mode
+
+- name: Check that public Miniflux API access requires authentication
+  ansible.builtin.command:
+    argv:
+      - curl
+      - --silent
+      - --show-error
+      - --output
+      - /dev/null
+      - --write-out
+      - "%{http_code}"
+      - --resolve
+      - "{{ miniflux_domain }}:443:127.0.0.1"
+      - "https://{{ miniflux_domain }}/v1/me"
+  register: miniflux_public_api_response
+  check_mode: false
+  changed_when: false
+  failed_when: false
+  retries: 6
+  delay: 5
+  until: miniflux_public_api_response.stdout | trim in ['401', '403']
+  when: not ansible_check_mode
+
+- name: Verify authenticated public Miniflux API access
+  ansible.builtin.command:
+    argv:
+      - curl
+      - --silent
+      - --show-error
+      - --output
+      - /dev/null
+      - --write-out
+      - "%{http_code}"
+      - --basic
+      - --config
+      - "-"
+      - --resolve
+      - "{{ miniflux_domain }}:443:127.0.0.1"
+      - "https://{{ miniflux_domain }}/v1/me"
+    stdin: |
+      user = "{{ miniflux_admin_username }}:{{ miniflux_secrets.admin_password }}"
+  register: miniflux_authenticated_public_api_response
+  check_mode: false
+  changed_when: false
+  no_log: true
+  when: not ansible_check_mode
+
+- name: Require the reviewed public Miniflux surface
+  ansible.builtin.assert:
+    that:
+      - miniflux_public_health_response.stdout | trim == '200'
+      - miniflux_public_api_response.stdout | trim in ['401', '403']
+      - miniflux_authenticated_public_api_response.stdout | trim == '200'
+    fail_msg: The public Miniflux route did not preserve application authentication.
+    quiet: true
+  when: not ansible_check_mode

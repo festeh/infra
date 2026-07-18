@@ -1,0 +1,421 @@
+---
+- name: Read installed package facts
+  ansible.builtin.package_facts:
+    manager: auto
+
+- name: Record whether Caddy was installed before this run
+  ansible.builtin.set_fact:
+    caddy_installed_before_apply: "{{ 'caddy' in ansible_facts.packages }}"
+
+- name: Check for the pinned Caddy repository key
+  ansible.builtin.stat:
+    path: "{{ caddy_repository_key_path }}"
+  register: caddy_repository_key_before_apply
+
+- name: Install Caddy repository prerequisites
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - gnupg
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+
+- name: Download the Caddy repository signing key
+  ansible.builtin.get_url:
+    url: "{{ caddy_repository_key_url }}"
+    dest: "{{ caddy_repository_key_path }}"
+    checksum: "{{ caddy_repository_key_checksum }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Defer Caddy installation during its first check-mode run
+  ansible.builtin.meta: end_role
+  when:
+    - ansible_check_mode
+    - not caddy_repository_key_before_apply.stat.exists
+
+- name: Read the Caddy repository signing-key fingerprint
+  ansible.builtin.command:
+    argv:
+      - gpg
+      - --batch
+      - --show-keys
+      - --with-colons
+      - --fingerprint
+      - "{{ caddy_repository_key_path }}"
+  register: caddy_repository_key_details
+  check_mode: false
+  changed_when: false
+
+- name: Require the reviewed Caddy repository signing key
+  ansible.builtin.assert:
+    that:
+      - >-
+        ('fpr:::::::::' ~ caddy_repository_key_fingerprint ~ ':')
+        in caddy_repository_key_details.stdout
+    fail_msg: >-
+      The Caddy repository key does not match the reviewed primary fingerprint
+      {{ caddy_repository_key_fingerprint }}.
+    quiet: true
+
+- name: Configure the official Caddy stable repository
+  ansible.builtin.copy:
+    content: |
+      Types: deb
+      URIs: {{ caddy_repository_url }}
+      Suites: {{ caddy_repository_suite }}
+      Components: main
+      Signed-By: {{ caddy_repository_key_path }}
+    dest: "{{ caddy_repository_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+  register: caddy_repository_config
+
+- name: Install or update Caddy without starting the package's default site
+  ansible.builtin.apt:
+    name: caddy
+    state: latest
+    update_cache: true
+    policy_rc_d: 101
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  register: caddy_package_install
+
+- name: Defer Caddy configuration during its first check-mode run
+  ansible.builtin.meta: end_role
+  when:
+    - ansible_check_mode
+    - not caddy_installed_before_apply
+
+- name: Read the installed Caddy version
+  ansible.builtin.command:
+    argv:
+      - caddy
+      - version
+  register: caddy_version_result
+  check_mode: false
+  changed_when: false
+
+- name: Require a supported Caddy version
+  ansible.builtin.assert:
+    that:
+      - >-
+        (caddy_version_result.stdout.split()[0] | regex_replace('^v', ''))
+        is version(caddy_minimum_version, '>=')
+    fail_msg: >-
+      Caddy {{ caddy_version_result.stdout.split()[0] }} is older than the
+      supported minimum {{ caddy_minimum_version }}.
+    quiet: true
+
+- name: Create the Caddy route directory
+  ansible.builtin.file:
+    path: "{{ caddy_sites_directory }}"
+    state: directory
+    owner: root
+    group: caddy
+    mode: "0750"
+
+- name: Create the protected Caddy log directory
+  ansible.builtin.file:
+    path: "{{ caddy_access_log_path | dirname }}"
+    state: directory
+    owner: caddy
+    group: caddy
+    mode: "0750"
+
+- name: Create Caddy's Ansible temporary directory
+  ansible.builtin.file:
+    path: /var/lib/caddy/.ansible/tmp
+    state: directory
+    owner: caddy
+    group: caddy
+    mode: "0700"
+
+- name: Install the deny-by-default Caddy routes
+  ansible.builtin.template:
+    src: 00-deny-unknown.caddy.j2
+    dest: "{{ caddy_sites_directory }}/00-deny-unknown.caddy"
+    owner: root
+    group: caddy
+    mode: "0640"
+  register: caddy_deny_routes
+
+- name: Install the Caddy configuration
+  ansible.builtin.template:
+    src: Caddyfile.j2
+    dest: /etc/caddy/Caddyfile
+    owner: root
+    group: caddy
+    mode: "0640"
+  register: caddy_main_config
+
+- name: Create the Caddy systemd override directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/caddy.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Harden the Caddy systemd service
+  ansible.builtin.template:
+    src: systemd-hardening.conf.j2
+    dest: /etc/systemd/system/caddy.service.d/10-infra-hardening.conf
+    owner: root
+    group: root
+    mode: "0644"
+  register: caddy_systemd_hardening
+
+- name: Find Caddy route snippets
+  ansible.builtin.find:
+    paths: "{{ caddy_sites_directory }}"
+    patterns: "*.caddy"
+    file_type: file
+  register: caddy_route_files
+
+- name: Require canonical Caddy formatting
+  ansible.builtin.command:
+    argv:
+      - caddy
+      - fmt
+      - --diff
+      - "{{ item }}"
+  become_user: caddy
+  loop: >-
+    {{ ['/etc/caddy/Caddyfile']
+       + (caddy_route_files.files | map(attribute='path') | list) }}
+  loop_control:
+    label: "{{ item }}"
+  check_mode: false
+  changed_when: false
+
+- name: Validate the complete Caddy configuration before activation
+  ansible.builtin.command:
+    argv:
+      - caddy
+      - validate
+      - --config
+      - /etc/caddy/Caddyfile
+      - --adapter
+      - caddyfile
+  become_user: caddy
+  environment:
+    HOME: /var/lib/caddy
+    XDG_CONFIG_HOME: /var/lib/caddy/.config
+    XDG_DATA_HOME: /var/lib/caddy/.local/share
+  check_mode: false
+  changed_when: false
+
+- name: Enable Caddy and load the managed configuration
+  ansible.builtin.systemd_service:
+    name: caddy.service
+    enabled: true
+    daemon_reload: true
+    state: >-
+      {{ 'restarted'
+         if (caddy_package_install.changed or caddy_systemd_hardening.changed or caddy_main_config.changed)
+         else 'started' }}
+
+- name: Gracefully reload changed route snippets
+  ansible.builtin.systemd_service:
+    name: caddy.service
+    state: reloaded
+  when:
+    - caddy_deny_routes.changed
+    - not caddy_package_install.changed
+    - not caddy_systemd_hardening.changed
+    - not caddy_main_config.changed
+
+- name: Wait for the Caddy admin API on loopback
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: 2019
+    state: started
+    timeout: 15
+
+- name: Check the deny-by-default HTTP response
+  ansible.builtin.command:
+    argv:
+      - curl
+      - --silent
+      - --output
+      - /dev/null
+      - --write-out
+      - "%{http_code}"
+      - --header
+      - "Host: unconfigured.invalid"
+      - http://127.0.0.1/
+  register: caddy_default_http_response
+  check_mode: false
+  changed_when: false
+
+- name: Check the deny-by-default HTTPS response
+  ansible.builtin.command:
+    argv:
+      - curl
+      - --silent
+      - --insecure
+      - --output
+      - /dev/null
+      - --write-out
+      - "%{http_code}"
+      - --resolve
+      - localhost:443:127.0.0.1
+      - https://localhost/
+  register: caddy_default_https_response
+  check_mode: false
+  changed_when: false
+
+- name: Require deny-by-default edge responses
+  ansible.builtin.assert:
+    that:
+      - caddy_default_http_response.stdout | trim | int == 404
+      - caddy_default_https_response.stdout | trim | int == 404
+    fail_msg: >-
+      Expected HTTP and HTTPS 404 responses; received
+      {{ caddy_default_http_response.stdout | trim }} and
+      {{ caddy_default_https_response.stdout | trim }}.
+    quiet: true
+
+- name: Exercise existing access-log credential redaction in check mode
+  ansible.builtin.command:
+    argv:
+      - curl
+      - --silent
+      - --output
+      - /dev/null
+      - --header
+      - "Host: unconfigured.invalid"
+      - --header
+      - "Authorization: Bearer infra-must-not-appear"
+      - >-
+        http://127.0.0.1/infra-caddy-redaction-probe?infra_probe=infra-must-not-appear
+  check_mode: false
+  changed_when: false
+  when: ansible_check_mode
+
+- name: Exercise complete access-log credential redaction
+  ansible.builtin.command:
+    argv:
+      - curl
+      - --silent
+      - --output
+      - /dev/null
+      - --header
+      - "Host: unconfigured.invalid"
+      - --header
+      - "Authorization: Bearer infra-must-not-appear"
+      - --header
+      - "X-Management-Key: infra-must-not-appear"
+      - >-
+        http://127.0.0.1/infra-caddy-redaction-probe?infra_probe=infra-must-not-appear
+  check_mode: false
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Read Caddy's active listeners
+  ansible.builtin.command:
+    argv:
+      - ss
+      - -H
+      - -lntup
+  register: caddy_active_listeners
+  check_mode: false
+  changed_when: false
+
+- name: Require the reviewed Caddy listener surface
+  ansible.builtin.assert:
+    that:
+      - caddy_active_listeners.stdout is regex('(?m)^tcp .*:80\\s')
+      - caddy_active_listeners.stdout is regex('(?m)^tcp .*:443\\s')
+      - caddy_active_listeners.stdout is regex('(?m)^tcp .*127\\.0\\.0\\.1:2019\\s')
+      - caddy_active_listeners.stdout is not regex('(?m)^tcp .*0\\.0\\.0\\.0:2019\\s')
+      - caddy_active_listeners.stdout is not regex('(?m)^tcp .*\\[::\\]:2019\\s')
+      - caddy_active_listeners.stdout is not regex('(?m)^udp .*:443\\s')
+    fail_msg: "Unexpected Caddy listeners: {{ caddy_active_listeners.stdout_lines }}"
+    quiet: true
+
+- name: Inspect the Caddy access log
+  ansible.builtin.stat:
+    path: "{{ caddy_access_log_path }}"
+  register: caddy_access_log
+
+- name: Read recent Caddy access-log entries
+  ansible.builtin.command:
+    argv:
+      - tail
+      - --lines=100
+      - "{{ caddy_access_log_path }}"
+  register: caddy_recent_access_log_entries
+  check_mode: false
+  changed_when: false
+  no_log: true
+
+- name: Select the Caddy redaction probe entry
+  ansible.builtin.set_fact:
+    caddy_redaction_probe_entries: >-
+      {{ caddy_recent_access_log_entries.stdout_lines
+         | map('from_json')
+         | selectattr('request', 'defined')
+         | selectattr('request.uri', 'defined')
+         | selectattr(
+             'request.uri',
+             'equalto',
+             '/infra-caddy-redaction-probe?REDACTED'
+           )
+         | list }}
+  no_log: true
+
+- name: Require a protected structured access log
+  ansible.builtin.assert:
+    that:
+      - caddy_access_log.stat.exists
+      - caddy_access_log.stat.pw_name == 'caddy'
+      - caddy_access_log.stat.gr_name == 'caddy'
+      - caddy_access_log.stat.mode == caddy_access_log_mode
+      - caddy_redaction_probe_entries | length > 0
+      - (caddy_redaction_probe_entries | last).status == 404
+      - >-
+        'infra-must-not-appear'
+        not in (caddy_redaction_probe_entries | last | to_json)
+    quiet: true
+  no_log: true
+
+- name: Read the effective Caddy JSON configuration
+  ansible.builtin.command:
+    argv:
+      - caddy
+      - adapt
+      - --config
+      - /etc/caddy/Caddyfile
+      - --adapter
+      - caddyfile
+  become_user: caddy
+  environment:
+    HOME: /var/lib/caddy
+    XDG_CONFIG_HOME: /var/lib/caddy/.config
+    XDG_DATA_HOME: /var/lib/caddy/.local/share
+  register: caddy_adapted_config_result
+  check_mode: false
+  changed_when: false
+
+- name: Record the effective Caddy access-log writer
+  ansible.builtin.set_fact:
+    caddy_effective_access_log_writer: >-
+      {{ (caddy_adapted_config_result.stdout | from_json).logging.logs.access.writer }}
+
+- name: Require bounded 30-day Caddy access logging
+  ansible.builtin.assert:
+    that:
+      - caddy_effective_access_log_writer.filename == caddy_access_log_path
+      - caddy_effective_access_log_writer.mode == caddy_access_log_mode
+      - caddy_effective_access_log_writer.roll_size_mb == 25
+      - caddy_effective_access_log_writer.roll_keep == caddy_access_log_roll_keep
+      - caddy_effective_access_log_writer.roll_keep_days == 30
+      - caddy_effective_access_log_writer.roll_at == [caddy_access_log_roll_at]
+    quiet: true

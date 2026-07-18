@@ -1,0 +1,18 @@
+# Managed by Ansible. Host-specific routes sort ahead of these catch-alls.
+http:// {
+	import infra_site
+	respond 404
+}
+
+https:// {
+	import infra_site
+	respond 404
+}
+
+# Scope the internal issuer to localhost only. Public application hostnames
+# added later continue to use Caddy's normal public certificate automation.
+localhost {
+	import infra_site
+	tls internal
+	respond 404
+}

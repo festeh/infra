@@ -1,0 +1,344 @@
+---
+- name: Require a complete static-site deployment declaration
+  ansible.builtin.assert:
+    that:
+      - dimalip_domains | length == 2
+      - dimalip_domains | unique | length == dimalip_domains | length
+      - >-
+        dimalip_domains
+        | select('match', '^[a-z0-9.-]+$')
+        | list
+        | length == dimalip_domains | length
+      - >-
+        dimalip_deploy_public_key
+        is match('^ssh-ed25519 [A-Za-z0-9+/]+={0,3}( .*)?$')
+      - dimalip_release_retention | int >= 2
+      - dimalip_max_artifact_bytes | int > 0
+      - dimalip_max_extracted_bytes | int >= dimalip_max_artifact_bytes | int
+      - dimalip_max_archive_members | int > 0
+      - dimalip_install_root is match('^/opt/[A-Za-z0-9._-]+$')
+      - dimalip_deploy_home is match('^/var/lib/[A-Za-z0-9._-]+$')
+    fail_msg: The dimalip.in deployment declaration is incomplete or invalid.
+    quiet: true
+
+- name: Create the restricted deployment group
+  ansible.builtin.group:
+    name: "{{ dimalip_deploy_group }}"
+    system: true
+
+- name: Create the restricted deployment account
+  ansible.builtin.user:
+    name: "{{ dimalip_deploy_user }}"
+    group: "{{ dimalip_deploy_group }}"
+    home: "{{ dimalip_deploy_home }}"
+    shell: /bin/bash
+    system: true
+    create_home: false
+    password_lock: true
+
+- name: Protect the deployment account home
+  ansible.builtin.file:
+    path: "{{ dimalip_deploy_home }}"
+    state: directory
+    owner: root
+    group: "{{ dimalip_deploy_group }}"
+    mode: "0750"
+
+- name: Protect the deployment account SSH directory
+  ansible.builtin.file:
+    path: "{{ dimalip_deploy_home }}/.ssh"
+    state: directory
+    owner: root
+    group: "{{ dimalip_deploy_group }}"
+    mode: "0750"
+
+- name: Create the deployment account Ansible temporary directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ dimalip_deploy_user }}"
+    group: "{{ dimalip_deploy_group }}"
+    mode: "0700"
+  loop:
+    - "{{ dimalip_deploy_home }}/.ansible"
+    - "{{ dimalip_deploy_home }}/.ansible/tmp"
+
+- name: Install the forced-command deployment key
+  ansible.builtin.copy:
+    content: |
+      restrict,command="{{ dimalip_deploy_command_path }}" {{ dimalip_deploy_public_key | trim }}
+    dest: "{{ dimalip_deploy_home }}/.ssh/authorized_keys"
+    owner: root
+    group: "{{ dimalip_deploy_group }}"
+    mode: "0640"
+
+- name: Create the static release directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ dimalip_deploy_user }}"
+    group: "{{ dimalip_deploy_group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - path: "{{ dimalip_incoming_directory }}"
+      mode: "0700"
+    - path: "{{ dimalip_install_root }}"
+      mode: "0755"
+    - path: "{{ dimalip_release_root }}"
+      mode: "0755"
+
+- name: Create the deployment activation lock
+  ansible.builtin.file:
+    path: "{{ dimalip_deploy_home }}/activate.lock"
+    state: touch
+    owner: "{{ dimalip_deploy_user }}"
+    group: "{{ dimalip_deploy_group }}"
+    mode: "0600"
+    access_time: preserve
+    modification_time: preserve
+
+- name: Create the local executable directory
+  ansible.builtin.file:
+    path: "{{ dimalip_deploy_command_path | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the restricted release receiver
+  ansible.builtin.template:
+    src: dimalip-deploy-command.py.j2
+    dest: "{{ dimalip_deploy_command_path }}"
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Inspect the controller's initial release artifact
+  ansible.builtin.stat:
+    path: "{{ dimalip_release_artifact_path }}"
+    checksum_algorithm: sha256
+  delegate_to: localhost
+  become: false
+  register: dimalip_initial_artifact
+  when: dimalip_release_artifact_path | length > 0
+
+- name: Require a valid initial release artifact
+  ansible.builtin.assert:
+    that:
+      - dimalip_initial_artifact.stat.exists
+      - dimalip_initial_artifact.stat.isreg
+      - not dimalip_initial_artifact.stat.islnk
+      - dimalip_initial_artifact.stat.size | int > 0
+      - >-
+        dimalip_initial_artifact.stat.size | int
+        <= dimalip_max_artifact_bytes | int
+      - dimalip_initial_artifact.stat.checksum is match('^[0-9a-f]{64}$')
+    fail_msg: The supplied initial dimalip.in release artifact is invalid.
+    quiet: true
+  when: dimalip_release_artifact_path | length > 0
+
+- name: Stage the initial release artifact
+  ansible.builtin.copy:
+    src: "{{ dimalip_release_artifact_path }}"
+    dest: >-
+      {{ dimalip_incoming_directory }}/{{ dimalip_initial_artifact.stat.checksum }}.tar.gz
+    owner: "{{ dimalip_deploy_user }}"
+    group: "{{ dimalip_deploy_group }}"
+    mode: "0600"
+  when: dimalip_release_artifact_path | length > 0
+
+- name: Activate the initial static release
+  ansible.builtin.command:
+    argv:
+      - "{{ dimalip_deploy_command_path }}"
+  become_user: "{{ dimalip_deploy_user }}"
+  environment:
+    SSH_ORIGINAL_COMMAND: >-
+      activate {{ dimalip_initial_artifact.stat.checksum }}
+  register: dimalip_initial_activation
+  changed_when: true
+  when:
+    - dimalip_release_artifact_path | length > 0
+    - not ansible_check_mode
+
+- name: Inspect the active static release
+  ansible.builtin.stat:
+    path: "{{ dimalip_current_path }}"
+    follow: false
+  register: dimalip_current_release
+
+- name: Inspect the active site entry point
+  ansible.builtin.stat:
+    path: "{{ dimalip_current_path }}/dist/index.html"
+  register: dimalip_index
+
+- name: Inspect the generated visualization manifest
+  ansible.builtin.stat:
+    path: "{{ dimalip_current_path }}/dist/visualizations.json"
+  register: dimalip_visualization_manifest
+
+- name: Require a complete active static release
+  ansible.builtin.assert:
+    that:
+      - ansible_check_mode or dimalip_current_release.stat.islnk | default(false)
+      - ansible_check_mode or dimalip_index.stat.isreg | default(false)
+      - ansible_check_mode or dimalip_visualization_manifest.stat.isreg | default(false)
+      - ansible_check_mode or dimalip_index.stat.pw_name == dimalip_deploy_user
+      - ansible_check_mode or dimalip_index.stat.mode == '0644'
+    fail_msg: No complete dimalip.in static release is active.
+    quiet: true
+
+- name: Read the active checksum-addressed release
+  ansible.builtin.command:
+    argv:
+      - "{{ dimalip_deploy_command_path }}"
+  become_user: "{{ dimalip_deploy_user }}"
+  environment:
+    SSH_ORIGINAL_COMMAND: status
+  register: dimalip_active_release
+  check_mode: false
+  changed_when: false
+  when: dimalip_current_release.stat.islnk | default(false)
+
+- name: Require a checksum-addressed active release
+  ansible.builtin.assert:
+    that:
+      - (dimalip_active_release.stdout | trim) is match('^[0-9a-f]{64}$')
+    fail_msg: The active dimalip.in release is outside the managed release tree.
+    quiet: true
+  when: dimalip_current_release.stat.islnk | default(false)
+
+- name: Inspect the dimalip.in Caddy route before convergence
+  ansible.builtin.stat:
+    path: "{{ caddy_sites_directory }}/40-dimalip.caddy"
+  register: dimalip_caddy_route_before_apply
+
+- name: Install the static dimalip.in Caddy route
+  ansible.builtin.template:
+    src: 40-dimalip.caddy.j2
+    dest: "{{ caddy_sites_directory }}/40-dimalip.caddy"
+    owner: root
+    group: caddy
+    mode: "0640"
+  register: dimalip_caddy_route
+
+- name: Require canonical formatting for the dimalip.in Caddy route
+  ansible.builtin.command:
+    argv:
+      - caddy
+      - fmt
+      - --diff
+      - "{{ caddy_sites_directory }}/40-dimalip.caddy"
+  become_user: caddy
+  check_mode: false
+  changed_when: false
+  when:
+    - not ansible_check_mode or dimalip_caddy_route_before_apply.stat.exists
+
+- name: Validate Caddy after adding the dimalip.in route
+  ansible.builtin.command:
+    argv:
+      - caddy
+      - validate
+      - --config
+      - /etc/caddy/Caddyfile
+      - --adapter
+      - caddyfile
+  become_user: caddy
+  environment:
+    HOME: /var/lib/caddy
+    XDG_CONFIG_HOME: /var/lib/caddy/.config
+    XDG_DATA_HOME: /var/lib/caddy/.local/share
+  check_mode: false
+  changed_when: false
+  when:
+    - not ansible_check_mode or dimalip_caddy_route_before_apply.stat.exists
+
+- name: Gracefully activate the dimalip.in Caddy route
+  ansible.builtin.systemd_service:
+    name: caddy.service
+    state: reloaded
+  when:
+    - dimalip_caddy_route.changed
+    - not ansible_check_mode
+
+- name: Check the public dimalip.in routes
+  ansible.builtin.command:
+    argv:
+      - curl
+      - --silent
+      - --show-error
+      - --output
+      - /dev/null
+      - --write-out
+      - "%{http_code}"
+      - --connect-timeout
+      - "5"
+      - --max-time
+      - "20"
+      - --retry
+      - "6"
+      - --retry-delay
+      - "2"
+      - --retry-all-errors
+      - --noproxy
+      - "*"
+      - --resolve
+      - "{{ item.host }}:443:127.0.0.1"
+      - "https://{{ item.host }}{{ item.path }}"
+  loop:
+    - host: "{{ dimalip_domains[0] }}"
+      path: /
+      status: "200"
+    - host: "{{ dimalip_domains[0] }}"
+      path: /visualizations.json
+      status: "200"
+    - host: "{{ dimalip_domains[0] }}"
+      path: /api/visualizations
+      status: "404"
+    - host: "{{ dimalip_domains[0] }}"
+      path: /infra-static-negative-probe
+      status: "404"
+    - host: "{{ dimalip_domains[1] }}"
+      path: /
+      status: "200"
+  loop_control:
+    label: "https://{{ item.host }}{{ item.path }}"
+  register: dimalip_public_routes
+  check_mode: false
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Require the reviewed public static-site behavior
+  ansible.builtin.assert:
+    that:
+      - item.stdout | trim == item.item.status
+    fail_msg: >-
+      Unexpected response from https://{{ item.item.host }}{{ item.item.path }}:
+      expected {{ item.item.status }}, received {{ item.stdout | trim }}.
+    quiet: true
+  loop: "{{ dimalip_public_routes.results }}"
+  loop_control:
+    label: "https://{{ item.item.host }}{{ item.item.path }}"
+  when: not ansible_check_mode
+
+- name: Check for an obsolete dimalip.in application listener
+  ansible.builtin.command:
+    argv:
+      - ss
+      - --tcp
+      - --listening
+      - --numeric
+      - --no-header
+      - sport = :6190
+  register: dimalip_obsolete_listener
+  check_mode: false
+  changed_when: false
+
+- name: Require the static site to have no application listener
+  ansible.builtin.assert:
+    that:
+      - dimalip_obsolete_listener.stdout | trim | length == 0
+    fail_msg: >-
+      TCP/6190 is still listening even though dimalip.in is now fully static.
+    quiet: true

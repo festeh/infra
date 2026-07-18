@@ -1,0 +1,51 @@
+[Unit]
+Description=Miniflux feed reader
+Documentation=https://miniflux.app/docs/
+Wants=network-online.target
+After=network-online.target postgresql.service
+
+[Service]
+Type=simple
+User={{ miniflux_user }}
+Group={{ miniflux_group }}
+WorkingDirectory={{ miniflux_state_directory }}
+Environment=HOME={{ miniflux_state_directory }}
+ExecStart={{ miniflux_binary_path }} -config-file {{ miniflux_config_path }}
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+UMask=0077
+LimitNOFILE=65536
+TasksMax=256
+MemoryMax=1G
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=miniflux
+
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectHostname=true
+ProtectClock=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectProc=invisible
+ProcSubset=pid
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RemoveIPC=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadOnlyPaths={{ miniflux_install_root }} {{ miniflux_config_directory }}
+ReadWritePaths={{ miniflux_state_directory }}
+
+[Install]
+WantedBy=multi-user.target

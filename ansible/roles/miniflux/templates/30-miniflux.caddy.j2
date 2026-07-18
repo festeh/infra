@@ -1,0 +1,5 @@
+# Managed by Ansible. Miniflux provides its own session and API authentication.
+{{ miniflux_domain }} {
+	import infra_site
+	reverse_proxy {{ miniflux_host }}:{{ miniflux_port }}
+}

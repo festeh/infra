@@ -21,7 +21,8 @@ not an expected root-password login through the KVM console.
 
 ## Current deployed state
 
-The base state was deployed and reboot-tested on 2026-07-12:
+The base state was deployed and reboot-tested on 2026-07-12. Caddy,
+PostgreSQL, CLIProxyAPI, Miniflux, and dimalip.in were restored by 2026-07-18:
 
 - Production host: SSH alias `ionos`, inventory host `web_server`.
 - Operating system: Ubuntu 26.04 LTS.
@@ -34,11 +35,62 @@ The base state was deployed and reboot-tested on 2026-07-12:
   retention target.
 - The IONOS control-plane firewall is authoritative. Ansible does not configure
   UFW/nftables or Fail2ban.
-- Caddy and all applications are currently absent. OpenCode is disabled.
+- Caddy is active on TCP/80 and TCP/443. Unknown hosts receive an empty 404
+  response, the admin API binds only to `127.0.0.1:2019`, and HTTP/3 is disabled
+  to avoid an unreviewed UDP listener. Its application routes are limited to
+  the reviewed CLIProxyAPI, Miniflux, and dimalip.in hosts described below.
+  Structured access logs redact query strings, rotate at 25 MiB or midnight,
+  retain at most 40 rotated files and 30 days, and therefore use at most about
+  1 GiB before compression plus the active file.
+  It was installed as Caddy 2.11.4 from the official stable repository. Every
+  Caddy-role apply installs or upgrades to the latest signed stable package.
+- PostgreSQL 18 is active on `127.0.0.1:5432` and `[::1]:5432` only. Miniflux
+  has a dedicated database and SCRAM login with no superuser, database-creation,
+  role-creation, or replication privileges.
+- CLIProxyAPI 7.2.88 is active as the dedicated unprivileged `cliproxyapi`
+  account, using the checksum-pinned plugin-free upstream release. It binds
+  only to `127.0.0.1:8317`, writes operational logs to the bounded system
+  journal, and reads its root-owned `0640` configuration from Ansible Vault.
+  Caddy exposes authenticated `/v1` routes, the exact static
+  `/management.html` login page, and management-key-protected `/v0/management`
+  routes at `ai.dimalip.in`; all other public paths return 404. CLIProxyAPI
+  itself remains loopback-only. The pinned panel is managed by Ansible, and
+  panel auto-update is disabled. The
+  configured providers are OpenRouter, Groq, Gemini, and Kimi. One real chat-completion
+  request through the public endpoint passed for each provider after deployment.
+- Miniflux 2.3.2 is checksum-pinned and active as an unprivileged `miniflux`
+  account on `127.0.0.1:8085`. Caddy publishes `rss.dimalip.in`; Miniflux's own
+  session and API authentication remain mandatory. The role declares the three
+  recovered feed subscriptions and the administrator's dark sans-serif theme,
+  and verifies both preferences and retained Ben's Bites entries on every
+  apply without forcing rate-limited upstream requests. Its
+  Kill-the-Newsletter endpoint exceeded the upstream client's 20-second
+  default during investigation, so the reviewed fetch timeout is 40 minutes
+  (2400 seconds).
+  Runtime and fetch logs remain in the bounded system journal.
+- `dimalip.in` and `www.dimalip.in` are active as a fully static Vue site.
+  Caddy reads `/opt/dimalip.in/current/dist` directly; there is no backend,
+  database, runtime secret, systemd unit, or TCP/6190 listener. Unknown files
+  and the removed `/api/*` paths return 404. A passwordless, non-sudo
+  `dimalip-deploy` account accepts one project-specific ED25519 key through an
+  OpenSSH forced command. That command permits only size-limited,
+  checksum-verified upload, atomic activation, and status operations within
+  the dimalip.in release tree. Shell commands are rejected and OpenSSH's
+  `restrict` option disables PTYs, forwarding, agents, and user startup files.
 
-The deployed state has been verified with a dry run, two consecutive
-idempotent applies (`changed=0`), a real reboot followed by another idempotent
-apply, and a negative listener-audit test.
+The base state has been verified across a real reboot and with a negative
+listener-audit test. The restored site passed its dry run, Caddy configuration,
+log-redaction and retention assertions, public CLIProxyAPI and Miniflux
+route/authentication checks, one model smoke test per provider, static-site and
+negative-shell deployment tests, the listener audit, and complete idempotence
+applies.
+
+## Restoration scope
+
+`docs/service-inventory.md` is authoritative. The retained production scope is
+Caddy, OAuth2 Proxy, PostgreSQL, CLIProxyAPI/ai, Miniflux/rss, Coach, My Agents
+with only the Coach agent, dimalip.in, Papujki, and Syncthing. Coach owns a
+dedicated PostgreSQL database.
 
 ## Ansible structure
 
@@ -48,6 +100,20 @@ apply, and a negative listener-audit test.
 - `ansible/roles/access` owns SSH hardening and root-password locking.
 - `ansible/roles/base` owns packages, upgrades, time, journald, and reboot
   handling.
+- `ansible/roles/caddy` owns the official package repository, edge service,
+  shared access logger, deny-by-default routes, and systemd sandbox.
+- `ansible/roles/postgresql` owns the single loopback-only PostgreSQL cluster
+  and its local authentication policy.
+- `ansible/roles/cliproxyapi` owns the pinned release, unprivileged service,
+  protected provider configuration, loopback listener, restricted Caddy route,
+  and service-specific verification.
+- `ansible/roles/miniflux` owns its pinned release, restricted PostgreSQL role
+  and database, protected configuration, declared feeds, loopback listener,
+  Caddy route, and feed-specific verification.
+- `ansible/roles/dimalip` owns the static release tree, restricted deployment
+  identity and command, public deployment key, Caddy route, and public/negative
+  verification. It intentionally owns no application service or secret.
+- `ansible/roles/runtime_secrets` owns protected per-service secret files.
 - `ansible/roles/listener_audit` installs and runs the listener guard.
 - Production variables live below
   `ansible/inventories/production/group_vars/`.
@@ -66,7 +132,11 @@ truncated to 15 characters.
 The current allowlist contains only:
 
 - TCP/22 owned by `sshd` (one IPv4 and one IPv6 socket).
+- TCP/80 and TCP/443 owned by `caddy` (one IPv4/IPv6 wildcard socket each).
 - UDP/68 owned by `systemd-network`, the image's DHCP client.
+
+Caddy's admin API on `127.0.0.1:2019` is ignored as loopback. HTTP/3 is
+deliberately disabled, so Caddy must not own UDP/443.
 
 Do not add an allowlist entry merely to make a failed deployment pass. First
 determine why the listener exists and whether it genuinely needs direct network
@@ -99,28 +169,26 @@ For each service restored after the rebuild:
 7. Run `just apply --check --diff`, then `just apply`, then `just apply` again
    to prove idempotence.
 
-## OpenCode safety boundary
-
-The previous VPS compromise occurred because OpenCode was publicly proxied
-without authentication, listened on all interfaces, and ran as root. Its API
-can intentionally execute shell commands, so Fail2ban or rate limiting would
-not have prevented the breach.
-
-Never restore the old OpenCode unit or `code.dimalip.in` Caddy block. OpenCode
-may be reintroduced only when all of these are true:
-
-- No public Caddy route; use an SSH tunnel or private VPN.
-- Bind only to loopback.
-- Enable `OPENCODE_SERVER_PASSWORD` even on the private path.
-- Run as the unprivileged `opencode` user with a minimal workspace and secrets.
-- Use a pinned, patched version and an isolated container/VM or strong systemd
-  sandbox with resource limits. Never mount the Docker socket or host SSH keys.
-
 ## Secrets
 
 Never print or commit secret values. Treat every credential present on the
 compromised VPS as exposed and rotate it before restoring the corresponding
 service.
+
+The production Vault password is stored as `ANSIBLE_VAULT_PASSWORD` in the
+ignored `~/dotfiles/.env`, which must remain owned by the current user with mode
+`0600`. Its recovery copy belongs in the Bitwarden item
+`infra: production Ansible Vault`. The checked-in
+`ansible/scripts/vault-password-client` is the only supported password bridge;
+do not add a plaintext vault-password file.
+
+Encrypted production values live in
+`ansible/inventories/production/group_vars/all/vault.yml` under
+`vault_service_secrets`. Service roles map those values into
+`runtime_secret_files`; the `runtime_secrets` role writes root-owned `0640`
+files below `/etc/<service>/` with `no_log: true` and diffs disabled. Do not run
+secret-bearing tasks with `ANSIBLE_DEBUG=1`, and never give routine application
+deployment workflows the Vault password.
 
 The ignored plaintext `ansible/secrets.yml` contains untrusted historical
 values and is not an approved source for the rebuilt server. Migrate only

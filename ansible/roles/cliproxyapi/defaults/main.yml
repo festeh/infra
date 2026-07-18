@@ -1,0 +1,52 @@
+---
+cliproxyapi_version: "7.2.88"
+cliproxyapi_release_architectures:
+  x86_64: amd64
+  aarch64: aarch64
+cliproxyapi_release_checksums:
+  x86_64: sha256:9ab153cf450ea7d4cb359dbb1de88873578f3dffef34d569c2388c5f5152e294
+  aarch64: sha256:a75734c43e6eba52e0bb17e1cbc958a444a6a7fd6e5da35a525328f8da828efa
+
+cliproxyapi_user: cliproxyapi
+cliproxyapi_group: cliproxyapi
+cliproxyapi_host: 127.0.0.1
+cliproxyapi_port: 8317
+cliproxyapi_domain: ai.dimalip.in
+
+cliproxyapi_install_root: /opt/cliproxyapi
+cliproxyapi_release_root: "{{ cliproxyapi_install_root }}/releases"
+cliproxyapi_release_directory: "{{ cliproxyapi_release_root }}/{{ cliproxyapi_version }}"
+cliproxyapi_current_path: "{{ cliproxyapi_install_root }}/current"
+cliproxyapi_binary_path: "{{ cliproxyapi_current_path }}/cli-proxy-api"
+cliproxyapi_cache_directory: /var/cache/cliproxyapi
+cliproxyapi_config_directory: /etc/cliproxyapi
+cliproxyapi_config_path: "{{ cliproxyapi_config_directory }}/config.yaml"
+cliproxyapi_state_directory: /var/lib/cliproxyapi
+cliproxyapi_auth_directory: "{{ cliproxyapi_state_directory }}/auth"
+cliproxyapi_management_panel_path: >-
+  {{ cliproxyapi_state_directory }}/management.html
+cliproxyapi_management_panel_version: "1.18.5"
+cliproxyapi_management_panel_checksum: sha256:b3cdd426f1f2b37550ead3fcc4033676f9aef372c5717337c4dcd87631398f36
+cliproxyapi_management_panel_url: >-
+  https://github.com/router-for-me/Cli-Proxy-API-Management-Center/releases/download/v{{ cliproxyapi_management_panel_version }}/management.html
+
+cliproxyapi_models:
+  openrouter:
+    - deepseek/deepseek-v4-flash
+    - xiaomi/mimo-v2.5
+    - minimax/minimax-m3
+    - z-ai/glm-5.2
+    - tencent/hy3-preview
+  groq:
+    - qwen/qwen3.6-27b
+  gemini:
+    - gemini-2.5-flash
+    - gemini-3.1-flash-lite-preview
+  kimi:
+    - kimi-for-coding
+
+cliproxyapi_smoke_models:
+  openrouter: deepseek/deepseek-v4-flash
+  groq: qwen/qwen3.6-27b
+  gemini: gemini-2.5-flash
+  kimi: kimi-for-coding
