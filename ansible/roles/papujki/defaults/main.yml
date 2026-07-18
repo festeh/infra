@@ -1,0 +1,23 @@
+---
+papujki_domains:
+  - papujki.space
+  - www.papujki.space
+
+papujki_deploy_user: papujki-deploy
+papujki_deploy_group: papujki-deploy
+papujki_deploy_home: /var/lib/papujki-deploy
+papujki_deploy_public_key: ""
+papujki_deploy_command_path: /usr/local/libexec/papujki-deploy-command
+papujki_incoming_directory: "{{ papujki_deploy_home }}/incoming"
+
+papujki_install_root: /opt/papujki
+papujki_release_root: "{{ papujki_install_root }}/releases"
+papujki_current_path: "{{ papujki_install_root }}/current"
+papujki_release_retention: 5
+papujki_max_artifact_bytes: 10485760
+papujki_max_extracted_bytes: 52428800
+papujki_max_archive_members: 5000
+
+# Supply this only for the initial restoration. Routine application pushes use
+# the restricted project workflow while Ansible verifies the resulting state.
+papujki_release_artifact_path: ""

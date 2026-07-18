@@ -15,14 +15,14 @@ import tarfile
 from typing import NoReturn
 
 
-INCOMING = Path({{ dimalip_incoming_directory | to_json }})
-RELEASES = Path({{ dimalip_release_root | to_json }})
-CURRENT = Path({{ dimalip_current_path | to_json }})
-LOCK_PATH = Path({{ (dimalip_deploy_home ~ '/activate.lock') | to_json }})
-RELEASE_RETENTION = {{ dimalip_release_retention }}
-MAX_ARTIFACT_BYTES = {{ dimalip_max_artifact_bytes }}
-MAX_EXTRACTED_BYTES = {{ dimalip_max_extracted_bytes }}
-MAX_ARCHIVE_MEMBERS = {{ dimalip_max_archive_members }}
+INCOMING = Path({{ static_release_incoming_directory | to_json }})
+RELEASES = Path({{ static_release_release_root | to_json }})
+CURRENT = Path({{ static_release_current_path | to_json }})
+LOCK_PATH = Path({{ (static_release_deploy_home ~ '/activate.lock') | to_json }})
+RELEASE_RETENTION = {{ static_release_retention }}
+MAX_ARTIFACT_BYTES = {{ static_release_max_artifact_bytes }}
+MAX_EXTRACTED_BYTES = {{ static_release_max_extracted_bytes }}
+MAX_ARCHIVE_MEMBERS = {{ static_release_max_archive_members }}
 RELEASE_ID_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 ALLOWED_TOP_LEVEL_PATHS = {"REVISION", "dist"}
 

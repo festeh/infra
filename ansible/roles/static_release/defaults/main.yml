@@ -1,0 +1,18 @@
+---
+static_release_name: ""
+static_release_deploy_user: ""
+static_release_deploy_group: ""
+static_release_deploy_home: ""
+static_release_deploy_public_key: ""
+static_release_deploy_command_path: ""
+static_release_incoming_directory: ""
+static_release_install_root: ""
+static_release_release_root: ""
+static_release_current_path: ""
+static_release_retention: 5
+static_release_max_artifact_bytes: 10485760
+static_release_max_extracted_bytes: 52428800
+static_release_max_archive_members: 5000
+static_release_artifact_path: ""
+static_release_required_files:
+  - index.html

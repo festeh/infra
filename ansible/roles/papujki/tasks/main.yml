@@ -1,0 +1,169 @@
+---
+- name: Require the reviewed Papujki domains
+  ansible.builtin.assert:
+    that:
+      - papujki_domains | length == 2
+      - papujki_domains | unique | length == papujki_domains | length
+      - >-
+        papujki_domains
+        | select('match', '^[a-z0-9.-]+$')
+        | list
+        | length == papujki_domains | length
+    fail_msg: The Papujki public-domain declaration is invalid.
+    quiet: true
+
+- name: Converge the restricted Papujki static release
+  ansible.builtin.include_role:
+    name: static_release
+  vars:
+    static_release_name: papujki
+    static_release_deploy_user: "{{ papujki_deploy_user }}"
+    static_release_deploy_group: "{{ papujki_deploy_group }}"
+    static_release_deploy_home: "{{ papujki_deploy_home }}"
+    static_release_deploy_public_key: "{{ papujki_deploy_public_key }}"
+    static_release_deploy_command_path: "{{ papujki_deploy_command_path }}"
+    static_release_incoming_directory: "{{ papujki_incoming_directory }}"
+    static_release_install_root: "{{ papujki_install_root }}"
+    static_release_release_root: "{{ papujki_release_root }}"
+    static_release_current_path: "{{ papujki_current_path }}"
+    static_release_retention: "{{ papujki_release_retention }}"
+    static_release_max_artifact_bytes: "{{ papujki_max_artifact_bytes }}"
+    static_release_max_extracted_bytes: "{{ papujki_max_extracted_bytes }}"
+    static_release_max_archive_members: "{{ papujki_max_archive_members }}"
+    static_release_artifact_path: "{{ papujki_release_artifact_path }}"
+    static_release_required_files:
+      - index.html
+      - parrot.gif
+      - reverseparrot.gif
+
+- name: Inspect the Papujki Caddy route before convergence
+  ansible.builtin.stat:
+    path: "{{ caddy_sites_directory }}/50-papujki.caddy"
+  register: papujki_caddy_route_before_apply
+
+- name: Install the static Papujki Caddy route
+  ansible.builtin.template:
+    src: 50-papujki.caddy.j2
+    dest: "{{ caddy_sites_directory }}/50-papujki.caddy"
+    owner: root
+    group: caddy
+    mode: "0640"
+  register: papujki_caddy_route
+
+- name: Require canonical formatting for the Papujki Caddy route
+  ansible.builtin.command:
+    argv:
+      - caddy
+      - fmt
+      - --diff
+      - "{{ caddy_sites_directory }}/50-papujki.caddy"
+  become_user: caddy
+  check_mode: false
+  changed_when: false
+  when:
+    - not ansible_check_mode or papujki_caddy_route_before_apply.stat.exists
+
+- name: Validate Caddy after adding the Papujki route
+  ansible.builtin.command:
+    argv:
+      - caddy
+      - validate
+      - --config
+      - /etc/caddy/Caddyfile
+      - --adapter
+      - caddyfile
+  become_user: caddy
+  environment:
+    HOME: /var/lib/caddy
+    XDG_CONFIG_HOME: /var/lib/caddy/.config
+    XDG_DATA_HOME: /var/lib/caddy/.local/share
+  check_mode: false
+  changed_when: false
+  when:
+    - not ansible_check_mode or papujki_caddy_route_before_apply.stat.exists
+
+- name: Gracefully activate the Papujki Caddy route
+  ansible.builtin.systemd_service:
+    name: caddy.service
+    state: reloaded
+  when:
+    - papujki_caddy_route.changed
+    - not ansible_check_mode
+
+- name: Check the public Papujki routes
+  ansible.builtin.command:
+    argv:
+      - curl
+      - --silent
+      - --show-error
+      - --output
+      - /dev/null
+      - --write-out
+      - "%{http_code}"
+      - --connect-timeout
+      - "5"
+      - --max-time
+      - "20"
+      - --retry
+      - "6"
+      - --retry-delay
+      - "2"
+      - --retry-all-errors
+      - --noproxy
+      - "*"
+      - --resolve
+      - "{{ item.host }}:443:127.0.0.1"
+      - "https://{{ item.host }}{{ item.path }}"
+  loop:
+    - host: "{{ papujki_domains[0] }}"
+      path: /
+      status: "200"
+    - host: "{{ papujki_domains[0] }}"
+      path: /parrot.gif
+      status: "200"
+    - host: "{{ papujki_domains[0] }}"
+      path: /infra-static-negative-probe
+      status: "404"
+    - host: "{{ papujki_domains[1] }}"
+      path: /
+      status: "200"
+  loop_control:
+    label: "https://{{ item.host }}{{ item.path }}"
+  register: papujki_public_routes
+  check_mode: false
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Require the reviewed public Papujki behavior
+  ansible.builtin.assert:
+    that:
+      - item.stdout | trim == item.item.status
+    fail_msg: >-
+      Unexpected response from https://{{ item.item.host }}{{ item.item.path }}:
+      expected {{ item.item.status }}, received {{ item.stdout | trim }}.
+    quiet: true
+  loop: "{{ papujki_public_routes.results }}"
+  loop_control:
+    label: "https://{{ item.item.host }}{{ item.item.path }}"
+  when: not ansible_check_mode
+
+- name: Check for the obsolete Papujki application listener
+  ansible.builtin.command:
+    argv:
+      - ss
+      - --tcp
+      - --listening
+      - --numeric
+      - --no-header
+      - sport = :3333
+  register: papujki_obsolete_listener
+  check_mode: false
+  changed_when: false
+
+- name: Require Papujki to have no application listener
+  ansible.builtin.assert:
+    that:
+      - papujki_obsolete_listener.stdout | trim | length == 0
+    fail_msg: >-
+      TCP/3333 is still listening even though Papujki is fully static.
+    quiet: true

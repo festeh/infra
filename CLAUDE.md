@@ -22,7 +22,8 @@ not an expected root-password login through the KVM console.
 ## Current deployed state
 
 The base state was deployed and reboot-tested on 2026-07-12. Caddy,
-PostgreSQL, CLIProxyAPI, Miniflux, and dimalip.in were restored by 2026-07-18:
+PostgreSQL, CLIProxyAPI, Miniflux, dimalip.in, and Papujki were restored by
+2026-07-18:
 
 - Production host: SSH alias `ionos`, inventory host `web_server`.
 - Operating system: Ubuntu 26.04 LTS.
@@ -38,7 +39,8 @@ PostgreSQL, CLIProxyAPI, Miniflux, and dimalip.in were restored by 2026-07-18:
 - Caddy is active on TCP/80 and TCP/443. Unknown hosts receive an empty 404
   response, the admin API binds only to `127.0.0.1:2019`, and HTTP/3 is disabled
   to avoid an unreviewed UDP listener. Its application routes are limited to
-  the reviewed CLIProxyAPI, Miniflux, and dimalip.in hosts described below.
+  the reviewed CLIProxyAPI, Miniflux, dimalip.in, and Papujki hosts described
+  below.
   Structured access logs redact query strings, rotate at 25 MiB or midnight,
   retain at most 40 rotated files and 30 days, and therefore use at most about
   1 GiB before compression plus the active file.
@@ -77,11 +79,18 @@ PostgreSQL, CLIProxyAPI, Miniflux, and dimalip.in were restored by 2026-07-18:
   checksum-verified upload, atomic activation, and status operations within
   the dimalip.in release tree. Shell commands are rejected and OpenSSH's
   `restrict` option disables PTYs, forwarding, agents, and user startup files.
+- `papujki.space` and `www.papujki.space` are active as a fully static Next.js
+  export. Caddy reads `/opt/papujki/current/dist` directly; there is no Node.js
+  process, systemd application unit, runtime secret, database, or TCP/3333
+  listener. A passwordless, non-sudo `papujki-deploy` account accepts one
+  project-specific ED25519 key through the same size-limited,
+  checksum-verified, forced-command release protocol used by dimalip.in.
 
 The base state has been verified across a real reboot and with a negative
-listener-audit test. The restored site passed its dry run, Caddy configuration,
-log-redaction and retention assertions, public CLIProxyAPI and Miniflux
-route/authentication checks, one model smoke test per provider, static-site and
+listener-audit test. The restored sites passed their dry runs, Caddy
+configuration, log-redaction and retention assertions, public CLIProxyAPI and
+Miniflux route/authentication checks, one model smoke test per provider,
+static-site and
 negative-shell deployment tests, the listener audit, and complete idempotence
 applies.
 
@@ -113,6 +122,12 @@ dedicated PostgreSQL database.
 - `ansible/roles/dimalip` owns the static release tree, restricted deployment
   identity and command, public deployment key, Caddy route, and public/negative
   verification. It intentionally owns no application service or secret.
+- `ansible/roles/papujki` owns the Papujki deployment declaration, static Caddy
+  route, and public/negative verification. It intentionally owns no
+  application service or secret.
+- `ansible/roles/static_release` implements the shared restricted deployment
+  identity, checksum-addressed release receiver, atomic activation, retention,
+  and active-file validation used by static application roles.
 - `ansible/roles/runtime_secrets` owns protected per-service secret files.
 - `ansible/roles/listener_audit` installs and runs the listener guard.
 - Production variables live below

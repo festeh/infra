@@ -1,0 +1,17 @@
+# Managed by Ansible. Papujki is a static export with no application listener.
+{{ papujki_domains | join(', ') }} {
+	import infra_site
+	encode zstd gzip
+
+	@immutable_assets path /_next/static/*
+	header @immutable_assets Cache-Control "public, max-age=31536000, immutable"
+
+	handle {
+		header {
+			Referrer-Policy "strict-origin-when-cross-origin"
+			X-Frame-Options "DENY"
+		}
+		root * {{ papujki_current_path }}/dist
+		file_server
+	}
+}

@@ -1,0 +1,231 @@
+---
+- name: Require a complete restricted static-release declaration
+  ansible.builtin.assert:
+    that:
+      - static_release_name is match('^[A-Za-z0-9._-]+$')
+      - static_release_deploy_user is match('^[a-z_][a-z0-9_-]*$')
+      - static_release_deploy_group is match('^[a-z_][a-z0-9_-]*$')
+      - >-
+        static_release_deploy_public_key
+        is match('^ssh-ed25519 [A-Za-z0-9+/]+={0,3}( .*)?$')
+      - static_release_retention | int >= 2
+      - static_release_max_artifact_bytes | int > 0
+      - >-
+        static_release_max_extracted_bytes | int
+        >= static_release_max_artifact_bytes | int
+      - static_release_max_archive_members | int > 0
+      - static_release_install_root is match('^/opt/[A-Za-z0-9._-]+$')
+      - static_release_deploy_home is match('^/var/lib/[A-Za-z0-9._-]+$')
+      - >-
+        static_release_deploy_command_path
+        is match('^/usr/local/libexec/[A-Za-z0-9._-]+$')
+      - static_release_incoming_directory | dirname == static_release_deploy_home
+      - static_release_release_root | dirname == static_release_install_root
+      - static_release_current_path | dirname == static_release_install_root
+      - static_release_required_files | length > 0
+      - >-
+        static_release_required_files
+        | select('match', '^[A-Za-z0-9._/-]+$')
+        | reject('search', '(^|/)\.\.(/|$)')
+        | list
+        | length == static_release_required_files | length
+    fail_msg: >-
+      The {{ static_release_name | default('static site', true) }} restricted
+      release declaration is incomplete or invalid.
+    quiet: true
+
+- name: Create the restricted deployment group
+  ansible.builtin.group:
+    name: "{{ static_release_deploy_group }}"
+    system: true
+
+- name: Create the restricted deployment account
+  ansible.builtin.user:
+    name: "{{ static_release_deploy_user }}"
+    group: "{{ static_release_deploy_group }}"
+    home: "{{ static_release_deploy_home }}"
+    shell: /bin/bash
+    system: true
+    create_home: false
+    password_lock: true
+
+- name: Protect the deployment account home
+  ansible.builtin.file:
+    path: "{{ static_release_deploy_home }}"
+    state: directory
+    owner: root
+    group: "{{ static_release_deploy_group }}"
+    mode: "0750"
+
+- name: Protect the deployment account SSH directory
+  ansible.builtin.file:
+    path: "{{ static_release_deploy_home }}/.ssh"
+    state: directory
+    owner: root
+    group: "{{ static_release_deploy_group }}"
+    mode: "0750"
+
+- name: Create deployment-account Ansible temporary directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ static_release_deploy_user }}"
+    group: "{{ static_release_deploy_group }}"
+    mode: "0700"
+  loop:
+    - "{{ static_release_deploy_home }}/.ansible"
+    - "{{ static_release_deploy_home }}/.ansible/tmp"
+
+- name: Install the forced-command deployment key
+  ansible.builtin.copy:
+    content: |
+      restrict,command="{{ static_release_deploy_command_path }}" {{ static_release_deploy_public_key | trim }}
+    dest: "{{ static_release_deploy_home }}/.ssh/authorized_keys"
+    owner: root
+    group: "{{ static_release_deploy_group }}"
+    mode: "0640"
+
+- name: Create the static release directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ static_release_deploy_user }}"
+    group: "{{ static_release_deploy_group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - path: "{{ static_release_incoming_directory }}"
+      mode: "0700"
+    - path: "{{ static_release_install_root }}"
+      mode: "0755"
+    - path: "{{ static_release_release_root }}"
+      mode: "0755"
+
+- name: Create the deployment activation lock
+  ansible.builtin.file:
+    path: "{{ static_release_deploy_home }}/activate.lock"
+    state: touch
+    owner: "{{ static_release_deploy_user }}"
+    group: "{{ static_release_deploy_group }}"
+    mode: "0600"
+    access_time: preserve
+    modification_time: preserve
+
+- name: Create the local executable directory
+  ansible.builtin.file:
+    path: "{{ static_release_deploy_command_path | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the restricted static-release receiver
+  ansible.builtin.template:
+    src: static-release-command.py.j2
+    dest: "{{ static_release_deploy_command_path }}"
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Inspect the controller's initial release artifact
+  ansible.builtin.stat:
+    path: "{{ static_release_artifact_path }}"
+    checksum_algorithm: sha256
+  delegate_to: localhost
+  become: false
+  register: static_release_initial_artifact
+  when: static_release_artifact_path | length > 0
+
+- name: Require a valid initial release artifact
+  ansible.builtin.assert:
+    that:
+      - static_release_initial_artifact.stat.exists
+      - static_release_initial_artifact.stat.isreg
+      - not static_release_initial_artifact.stat.islnk
+      - static_release_initial_artifact.stat.size | int > 0
+      - >-
+        static_release_initial_artifact.stat.size | int
+        <= static_release_max_artifact_bytes | int
+      - static_release_initial_artifact.stat.checksum is match('^[0-9a-f]{64}$')
+    fail_msg: >-
+      The supplied initial {{ static_release_name }} release artifact is invalid.
+    quiet: true
+  when: static_release_artifact_path | length > 0
+
+- name: Stage the initial release artifact
+  ansible.builtin.copy:
+    src: "{{ static_release_artifact_path }}"
+    dest: >-
+      {{ static_release_incoming_directory }}/{{ static_release_initial_artifact.stat.checksum }}.tar.gz
+    owner: "{{ static_release_deploy_user }}"
+    group: "{{ static_release_deploy_group }}"
+    mode: "0600"
+  when: static_release_artifact_path | length > 0
+
+- name: Activate the initial static release
+  ansible.builtin.command:
+    argv:
+      - "{{ static_release_deploy_command_path }}"
+  become_user: "{{ static_release_deploy_user }}"
+  environment:
+    SSH_ORIGINAL_COMMAND: >-
+      activate {{ static_release_initial_artifact.stat.checksum }}
+  changed_when: true
+  when:
+    - static_release_artifact_path | length > 0
+    - not ansible_check_mode
+
+- name: Inspect the active static release
+  ansible.builtin.stat:
+    path: "{{ static_release_current_path }}"
+    follow: false
+  register: static_release_current
+
+- name: Require an active managed-release link
+  ansible.builtin.assert:
+    that:
+      - ansible_check_mode or static_release_current.stat.islnk | default(false)
+    fail_msg: No {{ static_release_name }} static release is active.
+    quiet: true
+
+- name: Inspect required active-release files
+  ansible.builtin.stat:
+    path: "{{ static_release_current_path }}/dist/{{ item }}"
+  loop: "{{ static_release_required_files }}"
+  loop_control:
+    label: "{{ item }}"
+  register: static_release_required_file_stats
+
+- name: Require complete active-release files
+  ansible.builtin.assert:
+    that:
+      - ansible_check_mode or item.stat.isreg | default(false)
+      - ansible_check_mode or item.stat.pw_name == static_release_deploy_user
+      - ansible_check_mode or item.stat.mode == '0644'
+    fail_msg: >-
+      Required {{ static_release_name }} release file {{ item.item }} is absent
+      or has unsafe ownership or permissions.
+    quiet: true
+  loop: "{{ static_release_required_file_stats.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Read the active checksum-addressed release
+  ansible.builtin.command:
+    argv:
+      - "{{ static_release_deploy_command_path }}"
+  become_user: "{{ static_release_deploy_user }}"
+  environment:
+    SSH_ORIGINAL_COMMAND: status
+  register: static_release_active_id
+  check_mode: false
+  changed_when: false
+  when: static_release_current.stat.islnk | default(false)
+
+- name: Require a checksum-addressed active release
+  ansible.builtin.assert:
+    that:
+      - (static_release_active_id.stdout | trim) is match('^[0-9a-f]{64}$')
+    fail_msg: >-
+      The active {{ static_release_name }} release is outside its managed tree.
+    quiet: true
+  when: static_release_current.stat.islnk | default(false)

@@ -29,6 +29,9 @@
     - role: dimalip
       tags:
         - dimalip
+    - role: papujki
+      tags:
+        - papujki
     - role: runtime_secrets
       tags:
         - secrets
