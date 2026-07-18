@@ -1,0 +1,23 @@
+---
+base_timezone: Europe/Berlin
+base_apt_cache_valid_time: 3600
+base_reboot_when_required: true
+
+base_packages:
+  - acl
+  - ca-certificates
+  - chrony
+  - curl
+  - git
+  - iproute2
+  - jq
+  - needrestart
+  - python3-apt
+  - rsync
+  - tzdata
+  - unattended-upgrades
+  - unzip
+  - vim
+
+base_journal_system_max_use: 256M
+base_journal_max_retention: 14day

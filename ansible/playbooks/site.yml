@@ -1,0 +1,26 @@
+---
+- name: Keep administrative access hardened
+  ansible.builtin.import_playbook: harden-ssh.yml
+  tags:
+    - access
+
+- name: Converge the base server
+  hosts: web_server
+  become: true
+  gather_facts: true
+  serial: 1
+
+  roles:
+    - role: base
+      tags:
+        - base
+
+  post_tasks:
+    - name: Enforce the public-listener allowlist
+      ansible.builtin.include_role:
+        name: listener_audit
+        apply:
+          tags:
+            - always
+      tags:
+        - always

@@ -1,0 +1,13 @@
+---
+base_timezone: Europe/Berlin
+
+# A listener on loopback is always accepted. Every TCP/UDP socket on another
+# address must match protocol, port, and process here. `ss` truncates Linux
+# process names to 15 characters, hence `systemd-network` below.
+allowed_public_listeners:
+  - protocol: tcp
+    port: 22
+    process: sshd
+  - protocol: udp
+    port: 68
+    process: systemd-network

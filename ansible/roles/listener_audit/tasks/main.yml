@@ -1,0 +1,59 @@
+---
+- name: Validate public-listener rules
+  ansible.builtin.assert:
+    that:
+      - item.protocol in ["tcp", "udp"]
+      - item.port is number
+      - item.port | int > 0
+      - item.port | int < 65536
+      - item.process is not defined or item.process | length > 0
+    fail_msg: "Invalid public-listener rule: {{ item }}"
+  loop: "{{ allowed_public_listeners }}"
+  loop_control:
+    label: "{{ item.protocol | default('?') }}:{{ item.port | default('?') }}"
+
+- name: Create the listener-audit program directory
+  ansible.builtin.file:
+    path: "{{ listener_audit_binary | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the listener-audit program
+  ansible.builtin.copy:
+    src: listener_audit.py
+    dest: "{{ listener_audit_binary }}"
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Create the infra configuration directory
+  ansible.builtin.file:
+    path: "{{ listener_audit_config | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the public-listener allowlist
+  ansible.builtin.copy:
+    content: "{{ allowed_public_listeners | to_nice_json }}\n"
+    dest: "{{ listener_audit_config }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Reject unexpected public listeners
+  ansible.builtin.script:
+    cmd: listener_audit.py
+    executable: /usr/bin/python3
+  environment:
+    INFRA_ALLOWED_PUBLIC_LISTENERS_JSON: "{{ allowed_public_listeners | to_json }}"
+  register: listener_audit_result
+  check_mode: false
+  changed_when: false
+
+- name: Report the listener audit
+  ansible.builtin.debug:
+    msg: "{{ listener_audit_result.stdout }}"

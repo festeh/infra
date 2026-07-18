@@ -1,0 +1,4 @@
+---
+allowed_public_listeners: []
+listener_audit_binary: /usr/local/libexec/infra-listener-audit
+listener_audit_config: /etc/infra/allowed-public-listeners.json

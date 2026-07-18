@@ -1,0 +1,99 @@
+---
+- name: Provision the key-based administration account
+  hosts: web_server
+  gather_facts: false
+  become: false
+  vars:
+    bootstrap_admin_user: dima
+    bootstrap_public_key_path: >-
+      {{ lookup('env', 'BOOTSTRAP_SSH_PUBLIC_KEY') |
+         default(lookup('env', 'HOME') ~ '/.ssh/id_ed25519.pub', true) }}
+
+  pre_tasks:
+    - name: Check the controller SSH public key
+      ansible.builtin.stat:
+        path: "{{ bootstrap_public_key_path }}"
+      delegate_to: localhost
+      become: false
+      register: bootstrap_public_key_file
+
+    - name: Require the controller SSH public key
+      ansible.builtin.assert:
+        that:
+          - bootstrap_public_key_file.stat.exists
+          - bootstrap_public_key_file.stat.isreg
+        fail_msg: >-
+          SSH public key not found at {{ bootstrap_public_key_path }}.
+          Set BOOTSTRAP_SSH_PUBLIC_KEY to another public-key path.
+      delegate_to: localhost
+      become: false
+
+    - name: Ensure Python is available for Ansible
+      ansible.builtin.raw: |
+        if command -v python3 >/dev/null 2>&1; then
+          echo python-present
+        else
+          apt-get update
+          apt-get install -y python3
+          echo python-installed
+        fi
+      register: bootstrap_python
+      changed_when: "'python-installed' in bootstrap_python.stdout"
+
+    - name: Gather server facts
+      ansible.builtin.setup:
+
+  tasks:
+    - name: Install sudo
+      ansible.builtin.apt:
+        name: sudo
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Create the administration account
+      ansible.builtin.user:
+        name: "{{ bootstrap_admin_user }}"
+        comment: Ansible administrator
+        create_home: true
+        shell: /bin/bash
+        groups:
+          - sudo
+        append: true
+        password_lock: true
+        state: present
+
+    - name: Create the administrator SSH directory
+      ansible.builtin.file:
+        path: "/home/{{ bootstrap_admin_user }}/.ssh"
+        state: directory
+        owner: "{{ bootstrap_admin_user }}"
+        group: "{{ bootstrap_admin_user }}"
+        mode: "0700"
+
+    - name: Install the controller SSH public key
+      ansible.builtin.copy:
+        content: "{{ lookup('file', bootstrap_public_key_path) | trim }}\n"
+        dest: "/home/{{ bootstrap_admin_user }}/.ssh/authorized_keys"
+        owner: "{{ bootstrap_admin_user }}"
+        group: "{{ bootstrap_admin_user }}"
+        mode: "0600"
+
+    - name: Allow non-interactive administration through sudo
+      ansible.builtin.copy:
+        content: "{{ bootstrap_admin_user }} ALL=(ALL:ALL) NOPASSWD: ALL\n"
+        dest: "/etc/sudoers.d/90-{{ bootstrap_admin_user }}-ansible"
+        owner: root
+        group: root
+        mode: "0440"
+        validate: /usr/sbin/visudo -cf %s
+
+    - name: Confirm the administration account exists
+      ansible.builtin.command: "id {{ bootstrap_admin_user }}"
+      changed_when: false
+
+    - name: Report the safety gate
+      ansible.builtin.debug:
+        msg: >-
+          {{ bootstrap_admin_user }} is provisioned. Root and password SSH remain
+          enabled until harden-ssh.yml proves a separate key-based login works.

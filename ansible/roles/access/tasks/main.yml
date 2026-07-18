@@ -1,0 +1,92 @@
+---
+- name: Prove Ansible connected as the administration account
+  ansible.builtin.command: id -un
+  register: access_login_user
+  check_mode: false
+  changed_when: false
+  failed_when: access_login_user.stdout != access_admin_user
+
+- name: Prove non-interactive sudo works before hardening SSH
+  ansible.builtin.command: sudo -n true
+  check_mode: false
+  changed_when: false
+
+- name: Ensure the OpenSSH drop-in directory exists
+  become: true
+  ansible.builtin.file:
+    path: /etc/ssh/sshd_config.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install SSH hardening before cloud image defaults
+  become: true
+  ansible.builtin.copy:
+    src: sshd-hardening.conf
+    dest: /etc/ssh/sshd_config.d/00-infra-hardening.conf
+    owner: root
+    group: root
+    mode: "0644"
+  register: access_sshd_config
+
+- name: Validate the OpenSSH configuration
+  become: true
+  ansible.builtin.command: /usr/sbin/sshd -t
+  check_mode: false
+  changed_when: false
+
+- name: Read the effective OpenSSH configuration
+  become: true
+  ansible.builtin.command: /usr/sbin/sshd -T
+  register: access_sshd_effective
+  check_mode: false
+  changed_when: false
+
+- name: Require the intended SSH security settings
+  ansible.builtin.assert:
+    that:
+      - "'pubkeyauthentication yes' in access_sshd_effective.stdout"
+      - "'passwordauthentication no' in access_sshd_effective.stdout"
+      - "'kbdinteractiveauthentication no' in access_sshd_effective.stdout"
+      - "'permitrootlogin no' in access_sshd_effective.stdout"
+    fail_msg: The effective sshd configuration is not safely hardened.
+
+- name: Reload OpenSSH when its hardening changed
+  become: true
+  ansible.builtin.systemd_service:
+    name: ssh
+    state: reloaded
+  when: access_sshd_config.changed
+
+- name: Reset the Ansible SSH control connection
+  ansible.builtin.meta: reset_connection
+
+- name: Wait for a fresh key-based administration connection
+  ansible.builtin.wait_for_connection:
+    delay: 2
+    timeout: 30
+
+- name: Re-prove the administration identity after SSH reload
+  ansible.builtin.command: id -un
+  register: access_reconnected_user
+  check_mode: false
+  changed_when: false
+  failed_when: access_reconnected_user.stdout != access_admin_user
+
+- name: Re-prove sudo after SSH reload
+  ansible.builtin.command: sudo -n true
+  check_mode: false
+  changed_when: false
+
+- name: Lock the root password after the safe connection is proven
+  become: true
+  ansible.builtin.user:
+    name: root
+    password_lock: true
+
+- name: Report the hardened access path
+  ansible.builtin.debug:
+    msg: >-
+      Key-based SSH as {{ access_admin_user }} is verified. Root SSH, password
+      SSH, and the root password are disabled.
