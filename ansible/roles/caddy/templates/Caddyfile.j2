@@ -26,6 +26,9 @@
 		format filter {
 			# Query parameters may contain OAuth codes or API credentials.
 			request>uri regexp \?.*$ ?REDACTED
+			# Browser and machine credentials must never enter access logs.
+			request>headers>Authorization delete
+			request>headers>Cookie delete
 			# CLIProxyAPI also accepts this non-standard credential header.
 			request>headers>X-Management-Key delete
 			wrap json

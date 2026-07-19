@@ -22,8 +22,8 @@ not an expected root-password login through the KVM console.
 ## Current deployed state
 
 The base state was deployed and reboot-tested on 2026-07-12. Caddy,
-PostgreSQL, CLIProxyAPI, Miniflux, dimalip.in, and Papujki were restored by
-2026-07-18:
+PostgreSQL, CLIProxyAPI, Miniflux, dimalip.in, Papujki, Coach, and My Agents
+were restored by 2026-07-19:
 
 - Production host: SSH alias `ionos`, inventory host `web_server`.
 - Operating system: Ubuntu 26.04 LTS.
@@ -39,16 +39,16 @@ PostgreSQL, CLIProxyAPI, Miniflux, dimalip.in, and Papujki were restored by
 - Caddy is active on TCP/80 and TCP/443. Unknown hosts receive an empty 404
   response, the admin API binds only to `127.0.0.1:2019`, and HTTP/3 is disabled
   to avoid an unreviewed UDP listener. Its application routes are limited to
-  the reviewed CLIProxyAPI, Miniflux, dimalip.in, and Papujki hosts described
-  below.
+  the reviewed CLIProxyAPI, Miniflux, Coach, My Agents, dimalip.in, and Papujki
+  hosts described below.
   Structured access logs redact query strings, rotate at 25 MiB or midnight,
   retain at most 40 rotated files and 30 days, and therefore use at most about
   1 GiB before compression plus the active file.
   It was installed as Caddy 2.11.4 from the official stable repository. Every
   Caddy-role apply installs or upgrades to the latest signed stable package.
 - PostgreSQL 18 is active on `127.0.0.1:5432` and `[::1]:5432` only. Miniflux
-  has a dedicated database and SCRAM login with no superuser, database-creation,
-  role-creation, or replication privileges.
+  and Coach each have a dedicated database and SCRAM login with no superuser,
+  database-creation, role-creation, or replication privileges.
 - CLIProxyAPI 7.2.88 is active as the dedicated unprivileged `cliproxyapi`
   account, using the checksum-pinned plugin-free upstream release. It binds
   only to `127.0.0.1:8317`, writes operational logs to the bounded system
@@ -85,14 +85,39 @@ PostgreSQL, CLIProxyAPI, Miniflux, dimalip.in, and Papujki were restored by
   listener. A passwordless, non-sudo `papujki-deploy` account accepts one
   project-specific ED25519 key through the same size-limited,
   checksum-verified, forced-command release protocol used by dimalip.in.
+- Coach is active as a static Go binary under the dedicated unprivileged
+  `coach` account on `127.0.0.1:8080`. It stores focus, attention, agent-lock,
+  decision, and temptation state in its dedicated PostgreSQL database; the old
+  PocketBase dependency and TCP/8090 listener are absent. Caddy publishes
+  `coach.dimalip.in` with Basic Authentication for browser access and a
+  separate rotated bearer/query token for machine and WebSocket clients. Query
+  strings, Authorization, Cookie, and management-key headers are removed from
+  structured access logs. The systemd sandbox reports an exposure score of
+  1.3 (`OK`). A passwordless, non-sudo `coach-deploy` account accepts one
+  project-specific ED25519 key through a forced command that permits only
+  checksum-verified upload, atomic activation with rollback, status, and the
+  exact `coach.service` restart. The GitHub workflow receives no application,
+  PostgreSQL, Caddy, or Ansible secrets.
+- My Agents is active under the dedicated unprivileged `my-agents` account on
+  `127.0.0.1:8001` and registers only the Coach agent. Its SQLite LangGraph
+  checkpoints live in `/var/lib/my-agents`; model traffic goes only to the
+  loopback CLIProxyAPI listener and Coach tool traffic goes only to the
+  loopback Coach listener. Caddy publishes only the bearer-authenticated
+  health probe and the Coach WebSocket path at `agents.dimalip.in`; the latter
+  accepts the rotated Coach query token and removes it before proxying. The
+  service runs the `uv.lock`-resolved environment on the VPS's Python 3.14.
+  A separate `my-agents-deploy` forced-command identity may upload and
+  atomically activate only bounded source archives, run pinned uv with
+  `--locked`, roll back failed service starts, and restart only
+  `my-agents.service`. Runtime credentials remain in Ansible Vault and are not
+  available to GitHub Actions or the deployment identity.
 
 The base state has been verified across a real reboot and with a negative
 listener-audit test. The restored sites passed their dry runs, Caddy
 configuration, log-redaction and retention assertions, public CLIProxyAPI and
 Miniflux route/authentication checks, one model smoke test per provider,
-static-site and
-negative-shell deployment tests, the listener audit, and complete idempotence
-applies.
+static-site, Coach authentication/database/sandbox, negative-shell deployment
+tests, the listener audit, and complete idempotence applies.
 
 ## Restoration scope
 
@@ -125,9 +150,23 @@ dedicated PostgreSQL database.
 - `ansible/roles/papujki` owns the Papujki deployment declaration, static Caddy
   route, and public/negative verification. It intentionally owns no
   application service or secret.
+- `ansible/roles/coach` owns its unprivileged service, restricted PostgreSQL
+  role and database, protected environment, systemd sandbox, authenticated
+  Caddy route, immutable release declaration, and service-specific checks.
+- `ansible/roles/my_agents` owns its unprivileged service, protected runtime
+  environment, persistent SQLite state, systemd sandbox, narrow authenticated
+  Caddy route, initial release construction, and service-specific checks.
+- `ansible/roles/binary_release` implements the shared restricted deployment
+  identity, checksum-addressed binary receiver, atomic activation/rollback,
+  retention, exact-unit restart permission, and active-binary validation used
+  by process-backed application roles.
 - `ansible/roles/static_release` implements the shared restricted deployment
   identity, checksum-addressed release receiver, atomic activation, retention,
   and active-file validation used by static application roles.
+- `ansible/roles/uv_release` installs the checksum-pinned uv runtime and
+  implements bounded source upload, locked dependency synchronization,
+  checksum-addressed atomic activation/rollback, retention, exact-unit restart
+  permission, and virtual-environment validation for Python services.
 - `ansible/roles/runtime_secrets` owns protected per-service secret files.
 - `ansible/roles/listener_audit` installs and runs the listener guard.
 - Production variables live below
@@ -197,9 +236,10 @@ ignored `~/dotfiles/.env`, which must remain owned by the current user with mode
 `ansible/scripts/vault-password-client` is the only supported password bridge;
 do not add a plaintext vault-password file.
 
-Encrypted production values live in
-`ansible/inventories/production/group_vars/all/vault.yml` under
-`vault_service_secrets`. Service roles map those values into
+Encrypted production values live below
+`ansible/inventories/production/group_vars/all/`; shared service values use
+`vault.yml` and separately reviewable service files may use inline `!vault`
+values such as `coach.vault.yml`. Service roles map those values into
 `runtime_secret_files`; the `runtime_secrets` role writes root-owned `0640`
 files below `/etc/<service>/` with `no_log: true` and diffs disabled. Do not run
 secret-bearing tasks with `ANSIBLE_DEBUG=1`, and never give routine application

@@ -1,0 +1,18 @@
+---
+binary_release_name: ""
+binary_release_service_unit: ""
+binary_release_binary_path: ""
+binary_release_deploy_user: ""
+binary_release_deploy_group: ""
+binary_release_deploy_home: ""
+binary_release_deploy_public_key: ""
+binary_release_deploy_command_path: ""
+binary_release_incoming_directory: ""
+binary_release_install_root: ""
+binary_release_release_root: ""
+binary_release_current_path: ""
+binary_release_retention: 5
+binary_release_max_artifact_bytes: 26214400
+binary_release_max_extracted_bytes: 104857600
+binary_release_max_archive_members: 100
+binary_release_artifact_path: ""

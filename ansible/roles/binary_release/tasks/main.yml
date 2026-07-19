@@ -1,0 +1,230 @@
+---
+- name: Require a complete restricted binary-release declaration
+  ansible.builtin.assert:
+    that:
+      - binary_release_name is match('^[A-Za-z0-9._-]+$')
+      - binary_release_service_unit is match('^[A-Za-z0-9_.@-]+\.service$')
+      - binary_release_binary_path is match('^bin/[A-Za-z0-9._-]+$')
+      - binary_release_deploy_user is match('^[a-z_][a-z0-9_-]*$')
+      - binary_release_deploy_group is match('^[a-z_][a-z0-9_-]*$')
+      - >-
+        binary_release_deploy_public_key
+        is match('^ssh-ed25519 [A-Za-z0-9+/]+={0,3}( .*)?$')
+      - binary_release_retention | int >= 2
+      - binary_release_max_artifact_bytes | int > 0
+      - >-
+        binary_release_max_extracted_bytes | int
+        >= binary_release_max_artifact_bytes | int
+      - binary_release_max_archive_members | int > 0
+      - binary_release_install_root is match('^/opt/[A-Za-z0-9._-]+$')
+      - binary_release_deploy_home is match('^/var/lib/[A-Za-z0-9._-]+$')
+      - >-
+        binary_release_deploy_command_path
+        is match('^/usr/local/libexec/[A-Za-z0-9._-]+$')
+      - binary_release_incoming_directory | dirname == binary_release_deploy_home
+      - binary_release_release_root | dirname == binary_release_install_root
+      - binary_release_current_path | dirname == binary_release_install_root
+    fail_msg: >-
+      The {{ binary_release_name | default('binary service', true) }} restricted
+      release declaration is incomplete or invalid.
+    quiet: true
+
+- name: Create the restricted binary-deployment group
+  ansible.builtin.group:
+    name: "{{ binary_release_deploy_group }}"
+    system: true
+
+- name: Create the restricted binary-deployment account
+  ansible.builtin.user:
+    name: "{{ binary_release_deploy_user }}"
+    group: "{{ binary_release_deploy_group }}"
+    home: "{{ binary_release_deploy_home }}"
+    shell: /bin/bash
+    system: true
+    create_home: false
+    password_lock: true
+
+- name: Protect the binary-deployment account home
+  ansible.builtin.file:
+    path: "{{ binary_release_deploy_home }}"
+    state: directory
+    owner: root
+    group: "{{ binary_release_deploy_group }}"
+    mode: "0750"
+
+- name: Protect the binary-deployment SSH directory
+  ansible.builtin.file:
+    path: "{{ binary_release_deploy_home }}/.ssh"
+    state: directory
+    owner: root
+    group: "{{ binary_release_deploy_group }}"
+    mode: "0750"
+
+- name: Create binary-deployment Ansible temporary directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ binary_release_deploy_user }}"
+    group: "{{ binary_release_deploy_group }}"
+    mode: "0700"
+  loop:
+    - "{{ binary_release_deploy_home }}/.ansible"
+    - "{{ binary_release_deploy_home }}/.ansible/tmp"
+
+- name: Install the forced-command binary-deployment key
+  ansible.builtin.copy:
+    content: |
+      restrict,command="{{ binary_release_deploy_command_path }}" {{ binary_release_deploy_public_key | trim }}
+    dest: "{{ binary_release_deploy_home }}/.ssh/authorized_keys"
+    owner: root
+    group: "{{ binary_release_deploy_group }}"
+    mode: "0640"
+
+- name: Create the binary release directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ binary_release_deploy_user }}"
+    group: "{{ binary_release_deploy_group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - path: "{{ binary_release_incoming_directory }}"
+      mode: "0700"
+    - path: "{{ binary_release_install_root }}"
+      mode: "0755"
+    - path: "{{ binary_release_release_root }}"
+      mode: "0755"
+
+- name: Create the binary-deployment activation lock
+  ansible.builtin.file:
+    path: "{{ binary_release_deploy_home }}/activate.lock"
+    state: touch
+    owner: "{{ binary_release_deploy_user }}"
+    group: "{{ binary_release_deploy_group }}"
+    mode: "0600"
+    access_time: preserve
+    modification_time: preserve
+
+- name: Create the local executable directory
+  ansible.builtin.file:
+    path: "{{ binary_release_deploy_command_path | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Permit only the declared service restart
+  ansible.builtin.copy:
+    content: |
+      {{ binary_release_deploy_user }} ALL=(root) NOPASSWD: /usr/bin/systemctl restart {{ binary_release_service_unit }}
+    dest: "/etc/sudoers.d/{{ binary_release_deploy_user }}"
+    owner: root
+    group: root
+    mode: "0440"
+    validate: /usr/sbin/visudo -cf %s
+
+- name: Install the restricted binary-release receiver
+  ansible.builtin.template:
+    src: binary-release-command.py.j2
+    dest: "{{ binary_release_deploy_command_path }}"
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Inspect the controller's initial binary artifact
+  ansible.builtin.stat:
+    path: "{{ binary_release_artifact_path }}"
+    checksum_algorithm: sha256
+  delegate_to: localhost
+  become: false
+  register: binary_release_initial_artifact
+  when: binary_release_artifact_path | length > 0
+
+- name: Require a valid initial binary artifact
+  ansible.builtin.assert:
+    that:
+      - binary_release_initial_artifact.stat.exists
+      - binary_release_initial_artifact.stat.isreg
+      - not binary_release_initial_artifact.stat.islnk
+      - binary_release_initial_artifact.stat.size | int > 0
+      - >-
+        binary_release_initial_artifact.stat.size | int
+        <= binary_release_max_artifact_bytes | int
+      - binary_release_initial_artifact.stat.checksum is match('^[0-9a-f]{64}$')
+    fail_msg: >-
+      The supplied initial {{ binary_release_name }} release artifact is invalid.
+    quiet: true
+  when: binary_release_artifact_path | length > 0
+
+- name: Stage the initial binary artifact
+  ansible.builtin.copy:
+    src: "{{ binary_release_artifact_path }}"
+    dest: >-
+      {{ binary_release_incoming_directory }}/{{ binary_release_initial_artifact.stat.checksum }}.tar.gz
+    owner: "{{ binary_release_deploy_user }}"
+    group: "{{ binary_release_deploy_group }}"
+    mode: "0600"
+  when: binary_release_artifact_path | length > 0
+
+- name: Activate the initial binary release
+  ansible.builtin.command:
+    argv:
+      - "{{ binary_release_deploy_command_path }}"
+  become_user: "{{ binary_release_deploy_user }}"
+  environment:
+    SSH_ORIGINAL_COMMAND: >-
+      activate {{ binary_release_initial_artifact.stat.checksum }}
+  changed_when: true
+  when:
+    - binary_release_artifact_path | length > 0
+    - not ansible_check_mode
+
+- name: Inspect the active binary release
+  ansible.builtin.stat:
+    path: "{{ binary_release_current_path }}"
+    follow: false
+  register: binary_release_current
+
+- name: Require an active managed binary-release link
+  ansible.builtin.assert:
+    that:
+      - ansible_check_mode or binary_release_current.stat.islnk | default(false)
+    fail_msg: No {{ binary_release_name }} binary release is active.
+    quiet: true
+
+- name: Inspect the active release executable
+  ansible.builtin.stat:
+    path: "{{ binary_release_current_path }}/{{ binary_release_binary_path }}"
+  register: binary_release_executable
+
+- name: Require a protected active executable
+  ansible.builtin.assert:
+    that:
+      - ansible_check_mode or binary_release_executable.stat.isreg | default(false)
+      - ansible_check_mode or binary_release_executable.stat.pw_name == binary_release_deploy_user
+      - ansible_check_mode or binary_release_executable.stat.mode == '0755'
+    fail_msg: >-
+      The active {{ binary_release_name }} executable is absent or has unsafe
+      ownership or permissions.
+    quiet: true
+
+- name: Read the active checksum-addressed binary release
+  ansible.builtin.command:
+    argv:
+      - "{{ binary_release_deploy_command_path }}"
+  become_user: "{{ binary_release_deploy_user }}"
+  environment:
+    SSH_ORIGINAL_COMMAND: status
+  register: binary_release_active_id
+  check_mode: false
+  changed_when: false
+  when: binary_release_current.stat.islnk | default(false)
+
+- name: Require a checksum-addressed active binary release
+  ansible.builtin.assert:
+    that:
+      - (binary_release_active_id.stdout | trim) is match('^[0-9a-f]{64}$')
+    fail_msg: >-
+      The active {{ binary_release_name }} release is outside its managed tree.
+    quiet: true
+  when: binary_release_current.stat.islnk | default(false)

@@ -1,0 +1,342 @@
+---
+- name: Select the pinned uv release for this architecture
+  ansible.builtin.set_fact:
+    uv_release_uv_architecture: >-
+      {{ uv_release_uv_architectures.get(ansible_facts['architecture'], '') }}
+    uv_release_uv_checksum: >-
+      {{ uv_release_uv_checksums.get(ansible_facts['architecture'], '') }}
+
+- name: Require a complete restricted uv-release declaration
+  ansible.builtin.assert:
+    that:
+      - uv_release_name is match('^[A-Za-z0-9._-]+$')
+      - uv_release_service_unit is match('^[A-Za-z0-9_.@-]+\.service$')
+      - uv_release_entry_module is match('^[A-Za-z_][A-Za-z0-9_.]*$')
+      - uv_release_deploy_user is match('^[a-z_][a-z0-9_-]*$')
+      - uv_release_deploy_group is match('^[a-z_][a-z0-9_-]*$')
+      - >-
+        uv_release_deploy_public_key
+        is match('^ssh-ed25519 [A-Za-z0-9+/]+={0,3}( .*)?$')
+      - uv_release_retention | int >= 2
+      - uv_release_max_artifact_bytes | int > 0
+      - >-
+        uv_release_max_extracted_bytes | int
+        >= uv_release_max_artifact_bytes | int
+      - uv_release_max_archive_members | int > 0
+      - uv_release_sync_timeout_seconds | int >= 60
+      - uv_release_install_root is match('^/opt/[A-Za-z0-9._-]+$')
+      - uv_release_deploy_home is match('^/var/lib/[A-Za-z0-9._-]+$')
+      - uv_release_cache_directory is match('^/var/cache/[A-Za-z0-9._-]+$')
+      - >-
+        uv_release_deploy_command_path
+        is match('^/usr/local/libexec/[A-Za-z0-9._-]+$')
+      - uv_release_incoming_directory | dirname == uv_release_deploy_home
+      - uv_release_release_root | dirname == uv_release_install_root
+      - uv_release_current_path | dirname == uv_release_install_root
+      - uv_release_python_path is match('^/usr/bin/python3\.[0-9]+$')
+      - uv_release_uv_architecture | length > 0
+      - uv_release_uv_checksum is match('^sha256:[0-9a-f]{64}$')
+      - uv_release_uv_version is match('^[0-9]+\.[0-9]+\.[0-9]+$')
+      - uv_release_allowed_top_level_paths | length > 0
+      - >-
+        uv_release_allowed_top_level_paths
+        | select('match', '^[A-Za-z0-9._-]+$')
+        | list | length == uv_release_allowed_top_level_paths | length
+      - uv_release_required_files | length > 0
+      - >-
+        uv_release_required_files
+        | select('match', '^[A-Za-z0-9._/-]+$')
+        | reject('search', '(^|/)\.\.(/|$)')
+        | list | length == uv_release_required_files | length
+    fail_msg: >-
+      The {{ uv_release_name | default('Python service', true) }} restricted
+      uv-release declaration is incomplete or invalid.
+    quiet: true
+
+- name: Create the pinned uv installation directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ uv_release_uv_install_root }}"
+    - "{{ uv_release_uv_release_root }}"
+    - "{{ uv_release_uv_release_directory }}"
+    - "{{ uv_release_uv_cache_directory }}"
+
+- name: Download the pinned uv release
+  ansible.builtin.get_url:
+    url: >-
+      https://github.com/astral-sh/uv/releases/download/{{ uv_release_uv_version }}/uv-{{ uv_release_uv_architecture }}-unknown-linux-gnu.tar.gz
+    dest: >-
+      {{ uv_release_uv_cache_directory }}/uv-{{ uv_release_uv_version }}-{{ uv_release_uv_architecture }}.tar.gz
+    checksum: "{{ uv_release_uv_checksum }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Extract the pinned uv release
+  ansible.builtin.unarchive:
+    src: >-
+      {{ uv_release_uv_cache_directory }}/uv-{{ uv_release_uv_version }}-{{ uv_release_uv_architecture }}.tar.gz
+    dest: "{{ uv_release_uv_release_directory }}"
+    remote_src: true
+    extra_opts:
+      - --strip-components=1
+    creates: "{{ uv_release_uv_binary_path }}"
+    owner: root
+    group: root
+
+- name: Protect the pinned uv executables
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: file
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ uv_release_uv_binary_path }}"
+    - "{{ uv_release_uvx_binary_path }}"
+
+- name: Activate the pinned uv commands
+  ansible.builtin.file:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    state: link
+    owner: root
+    group: root
+    force: true
+  loop:
+    - src: "{{ uv_release_uv_binary_path }}"
+      dest: /usr/local/bin/uv
+    - src: "{{ uv_release_uvx_binary_path }}"
+      dest: /usr/local/bin/uvx
+
+- name: Verify the pinned uv version
+  ansible.builtin.command:
+    argv:
+      - "{{ uv_release_uv_binary_path }}"
+      - --version
+  register: uv_release_uv_version_check
+  check_mode: false
+  changed_when: false
+
+- name: Require the selected uv version
+  ansible.builtin.assert:
+    that:
+      - >-
+        uv_release_uv_version_check.stdout | trim
+        is match('^uv ' ~ (uv_release_uv_version | regex_escape) ~ '( |$)')
+    fail_msg: The installed uv executable does not match its pinned version.
+    quiet: true
+
+- name: Verify the pinned Python interpreter exists
+  ansible.builtin.stat:
+    path: "{{ uv_release_python_path }}"
+  register: uv_release_python
+
+- name: Require the pinned Python interpreter
+  ansible.builtin.assert:
+    that:
+      - uv_release_python.stat.isreg | default(false)
+      - uv_release_python.stat.executable | default(false)
+    fail_msg: "{{ uv_release_python_path }} is not an executable regular file."
+    quiet: true
+
+- name: Create the restricted uv-deployment group
+  ansible.builtin.group:
+    name: "{{ uv_release_deploy_group }}"
+    system: true
+
+- name: Create the restricted uv-deployment account
+  ansible.builtin.user:
+    name: "{{ uv_release_deploy_user }}"
+    group: "{{ uv_release_deploy_group }}"
+    home: "{{ uv_release_deploy_home }}"
+    shell: /bin/bash
+    system: true
+    create_home: false
+    password_lock: true
+
+- name: Protect the uv-deployment account home
+  ansible.builtin.file:
+    path: "{{ uv_release_deploy_home }}"
+    state: directory
+    owner: root
+    group: "{{ uv_release_deploy_group }}"
+    mode: "0750"
+
+- name: Protect the uv-deployment SSH directory
+  ansible.builtin.file:
+    path: "{{ uv_release_deploy_home }}/.ssh"
+    state: directory
+    owner: root
+    group: "{{ uv_release_deploy_group }}"
+    mode: "0750"
+
+- name: Create uv-deployment working directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ uv_release_deploy_user }}"
+    group: "{{ uv_release_deploy_group }}"
+    mode: "0700"
+  loop:
+    - "{{ uv_release_deploy_home }}/.ansible"
+    - "{{ uv_release_deploy_home }}/.ansible/tmp"
+    - "{{ uv_release_incoming_directory }}"
+    - "{{ uv_release_cache_directory }}"
+
+- name: Install the forced-command uv-deployment key
+  ansible.builtin.copy:
+    content: |
+      restrict,command="{{ uv_release_deploy_command_path }}" {{ uv_release_deploy_public_key | trim }}
+    dest: "{{ uv_release_deploy_home }}/.ssh/authorized_keys"
+    owner: root
+    group: "{{ uv_release_deploy_group }}"
+    mode: "0640"
+
+- name: Create the uv release directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ uv_release_deploy_user }}"
+    group: "{{ uv_release_deploy_group }}"
+    mode: "0755"
+  loop:
+    - "{{ uv_release_install_root }}"
+    - "{{ uv_release_release_root }}"
+
+- name: Create the uv-deployment activation lock
+  ansible.builtin.file:
+    path: "{{ uv_release_deploy_home }}/activate.lock"
+    state: touch
+    owner: "{{ uv_release_deploy_user }}"
+    group: "{{ uv_release_deploy_group }}"
+    mode: "0600"
+    access_time: preserve
+    modification_time: preserve
+
+- name: Create the local executable directory
+  ansible.builtin.file:
+    path: "{{ uv_release_deploy_command_path | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Permit only the declared service restart
+  ansible.builtin.copy:
+    content: |
+      {{ uv_release_deploy_user }} ALL=(root) NOPASSWD: /usr/bin/systemctl restart {{ uv_release_service_unit }}
+    dest: "/etc/sudoers.d/{{ uv_release_deploy_user }}"
+    owner: root
+    group: root
+    mode: "0440"
+    validate: /usr/sbin/visudo -cf %s
+
+- name: Install the restricted uv-release receiver
+  ansible.builtin.template:
+    src: uv-release-command.py.j2
+    dest: "{{ uv_release_deploy_command_path }}"
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Inspect the controller's initial uv artifact
+  ansible.builtin.stat:
+    path: "{{ uv_release_artifact_path }}"
+    checksum_algorithm: sha256
+  delegate_to: localhost
+  become: false
+  register: uv_release_initial_artifact
+  when: uv_release_artifact_path | length > 0
+
+- name: Require a valid initial uv artifact
+  ansible.builtin.assert:
+    that:
+      - uv_release_initial_artifact.stat.exists
+      - uv_release_initial_artifact.stat.isreg
+      - not uv_release_initial_artifact.stat.islnk
+      - uv_release_initial_artifact.stat.size | int > 0
+      - >-
+        uv_release_initial_artifact.stat.size | int
+        <= uv_release_max_artifact_bytes | int
+      - uv_release_initial_artifact.stat.checksum is match('^[0-9a-f]{64}$')
+    fail_msg: >-
+      The supplied initial {{ uv_release_name }} release artifact is invalid.
+    quiet: true
+  when: uv_release_artifact_path | length > 0
+
+- name: Stage the initial uv artifact
+  ansible.builtin.copy:
+    src: "{{ uv_release_artifact_path }}"
+    dest: >-
+      {{ uv_release_incoming_directory }}/{{ uv_release_initial_artifact.stat.checksum }}.tar.gz
+    owner: "{{ uv_release_deploy_user }}"
+    group: "{{ uv_release_deploy_group }}"
+    mode: "0600"
+  when: uv_release_artifact_path | length > 0
+
+- name: Activate the initial uv release
+  ansible.builtin.command:
+    argv:
+      - "{{ uv_release_deploy_command_path }}"
+  become_user: "{{ uv_release_deploy_user }}"
+  environment:
+    SSH_ORIGINAL_COMMAND: >-
+      activate {{ uv_release_initial_artifact.stat.checksum }}
+  changed_when: true
+  when:
+    - uv_release_artifact_path | length > 0
+    - not ansible_check_mode
+
+- name: Inspect the active uv release
+  ansible.builtin.stat:
+    path: "{{ uv_release_current_path }}"
+    follow: false
+  register: uv_release_current
+
+- name: Require an active managed uv-release link
+  ansible.builtin.assert:
+    that:
+      - ansible_check_mode or uv_release_current.stat.islnk | default(false)
+    fail_msg: No {{ uv_release_name }} uv release is active.
+    quiet: true
+
+- name: Inspect the active uv virtual environment
+  ansible.builtin.stat:
+    path: "{{ uv_release_current_path }}/.venv/bin/python"
+  register: uv_release_python_executable
+
+- name: Require an executable active uv environment
+  ansible.builtin.assert:
+    that:
+      - ansible_check_mode or uv_release_python_executable.stat.exists | default(false)
+      - ansible_check_mode or uv_release_python_executable.stat.executable | default(false)
+    fail_msg: >-
+      The active {{ uv_release_name }} uv environment is absent or invalid.
+    quiet: true
+
+- name: Read the active checksum-addressed uv release
+  ansible.builtin.command:
+    argv:
+      - "{{ uv_release_deploy_command_path }}"
+  become_user: "{{ uv_release_deploy_user }}"
+  environment:
+    SSH_ORIGINAL_COMMAND: status
+  register: uv_release_active_id
+  check_mode: false
+  changed_when: false
+  when: uv_release_current.stat.islnk | default(false)
+
+- name: Require a checksum-addressed active uv release
+  ansible.builtin.assert:
+    that:
+      - (uv_release_active_id.stdout | trim) is match('^[0-9a-f]{64}$')
+    fail_msg: >-
+      The active {{ uv_release_name }} release is outside its managed tree.
+    quiet: true
+  when: uv_release_current.stat.islnk | default(false)

@@ -16,13 +16,19 @@ ansible/
 └── roles/
     ├── access/
     ├── base/
+    ├── binary_release/
     ├── caddy/
     ├── cliproxyapi/
+    ├── coach/
     ├── dimalip/
     ├── listener_audit/
     ├── miniflux/
+    ├── my_agents/
+    ├── papujki/
     ├── postgresql/
-    └── runtime_secrets/
+    ├── runtime_secrets/
+    ├── static_release/
+    └── uv_release/
 docs/
 └── service-inventory.md
 ```
@@ -83,11 +89,13 @@ example `just apply --check --diff`.
 
 ## Production secrets
 
-Production secret variables are committed only in the encrypted
-`ansible/inventories/production/group_vars/all/vault.yml` file. Ansible obtains
-the Vault password from `ANSIBLE_VAULT_PASSWORD` in `~/dotfiles/.env` through a
-checked-in password client; the env file must be owned by the current user and
-must not grant access to group or others.
+Production secret variables are committed only as Ansible Vault ciphertext
+below `ansible/inventories/production/group_vars/all/`. Shared values live in
+`vault.yml`; separately reviewable service files may use inline `!vault`
+values, as `coach.vault.yml` does. Ansible obtains the Vault password from
+`ANSIBLE_VAULT_PASSWORD` in `~/dotfiles/.env` through a checked-in password
+client; the env file must be owned by the current user and must not grant
+access to group or others.
 
 The password's recovery copy belongs in Bitwarden. Runtime application secrets
 are installed as root-owned files below `/etc/<service>/`, readable only by
@@ -97,9 +105,9 @@ replace code without receiving the Vault password or rewriting these files.
 The current site playbook maintains SSH hardening, upgrades the base Ubuntu
 system, enables unattended security updates, configures persistent bounded
 logs and time synchronization, manages the deny-by-default Caddy edge and
-loopback-only PostgreSQL, CLIProxyAPI, and Miniflux services, the static
-`dimalip.in` site, reboots when a package upgrade requires it, and rejects
-unexpected network listeners.
+loopback-only PostgreSQL, CLIProxyAPI, Miniflux, Coach, and My Agents services,
+the static `dimalip.in` and Papujki sites, reboots when a package upgrade
+requires it, and rejects unexpected network listeners.
 
 The IONOS firewall remains the external firewall. The listener audit is a
 separate host-level invariant: loopback sockets are accepted automatically;

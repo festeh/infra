@@ -1,0 +1,38 @@
+---
+uv_release_name: ""
+uv_release_service_unit: ""
+uv_release_entry_module: ""
+uv_release_deploy_user: ""
+uv_release_deploy_group: ""
+uv_release_deploy_home: ""
+uv_release_deploy_public_key: ""
+uv_release_deploy_command_path: ""
+uv_release_incoming_directory: ""
+uv_release_cache_directory: ""
+uv_release_install_root: ""
+uv_release_release_root: ""
+uv_release_current_path: ""
+uv_release_allowed_top_level_paths: []
+uv_release_required_files: []
+uv_release_retention: 3
+uv_release_max_artifact_bytes: 10485760
+uv_release_max_extracted_bytes: 52428800
+uv_release_max_archive_members: 500
+uv_release_sync_timeout_seconds: 1200
+uv_release_artifact_path: ""
+
+uv_release_python_path: /usr/bin/python3.14
+uv_release_uv_version: "0.11.29"
+uv_release_uv_architectures:
+  x86_64: x86_64
+  aarch64: aarch64
+uv_release_uv_checksums:
+  x86_64: sha256:04f8b82f5d47f0512dcd32c67a4a6f16a0ea27c81537c338fd0ad6b23cebe829
+  aarch64: sha256:94500fb064ae3c971a873cba64d94694c50677e0a4dbf78735c80509e7429919
+uv_release_uv_install_root: /opt/uv
+uv_release_uv_release_root: "{{ uv_release_uv_install_root }}/releases"
+uv_release_uv_release_directory: >-
+  {{ uv_release_uv_release_root }}/{{ uv_release_uv_version }}
+uv_release_uv_cache_directory: /var/cache/uv
+uv_release_uv_binary_path: "{{ uv_release_uv_release_directory }}/uv"
+uv_release_uvx_binary_path: "{{ uv_release_uv_release_directory }}/uvx"

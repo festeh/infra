@@ -1,0 +1,37 @@
+# Managed by Ansible. Coach itself remains loopback-only.
+{{ coach_domain }} {
+	import infra_site
+	encode zstd gzip
+
+	header {
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Frame-Options "DENY"
+	}
+
+	@machine_bearer header Authorization "Bearer {{ coach_secrets.api_token }}"
+	handle @machine_bearer {
+		reverse_proxy {{ coach_host }}:{{ coach_port }} {
+			header_up -Authorization
+			header_up -Cookie
+		}
+	}
+
+	@machine_query query token={{ coach_secrets.api_token }}
+	handle @machine_query {
+		uri query -token
+		reverse_proxy {{ coach_host }}:{{ coach_port }} {
+			header_up -Authorization
+			header_up -Cookie
+		}
+	}
+
+	handle {
+		basic_auth {
+			{{ coach_basic_auth_username }} {{ coach_secrets.basic_auth_hash }}
+		}
+		reverse_proxy {{ coach_host }}:{{ coach_port }} {
+			header_up -Authorization
+			header_up -Cookie
+		}
+	}
+}

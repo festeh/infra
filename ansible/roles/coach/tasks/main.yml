@@ -1,0 +1,535 @@
+---
+- name: Load the encrypted Coach secret mapping
+  ansible.builtin.set_fact:
+    coach_secrets: "{{ vault_coach_secrets | default({}) }}"
+  no_log: true
+
+- name: Require a complete and safe Coach declaration
+  ansible.builtin.assert:
+    that:
+      - coach_host == '127.0.0.1'
+      - coach_port | int == 8080
+      - coach_domain is match('^[a-z0-9.-]+$')
+      - coach_basic_auth_username is match('^[A-Za-z0-9._-]+$')
+      - coach_deploy_public_key is match('^ssh-ed25519 [A-Za-z0-9+/]+={0,3}( .*)?$')
+      - coach_secrets is mapping
+      - coach_secrets.get('db_password', '') is match('^[0-9a-f]{64}$')
+      - coach_secrets.get('api_token', '') is match('^[0-9a-f]{64}$')
+      - coach_secrets.get('basic_password', '') | length >= 24
+      - coach_secrets.get('basic_auth_hash', '') is match('^\\$2[aby]\\$14\\$[./A-Za-z0-9]{53}$')
+      - coach_secrets.db_password != coach_secrets.api_token
+      - coach_secrets.db_password != coach_secrets.basic_password
+      - coach_secrets.api_token != coach_secrets.basic_password
+    fail_msg: The encrypted Coach credentials or service declaration are invalid.
+    quiet: true
+  no_log: true
+
+- name: Check whether the Coach service account already exists
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ coach_user }}"
+    fail_key: false
+  check_mode: false
+  changed_when: false
+
+- name: Record whether Coach existed before this run
+  ansible.builtin.set_fact:
+    coach_user_existed_before_apply: >-
+      {{ ansible_facts.getent_passwd.get(coach_user) is not none }}
+
+- name: Create the Coach system group
+  ansible.builtin.group:
+    name: "{{ coach_group }}"
+    system: true
+
+- name: Create the unprivileged Coach service account
+  ansible.builtin.user:
+    name: "{{ coach_user }}"
+    group: "{{ coach_group }}"
+    home: "{{ coach_state_directory }}"
+    shell: /usr/sbin/nologin
+    system: true
+    create_home: false
+    password_lock: true
+
+- name: Defer a first-time Coach installation during check mode
+  ansible.builtin.meta: end_role
+  when:
+    - ansible_check_mode
+    - not coach_user_existed_before_apply
+
+- name: Create the protected Coach state directory
+  ansible.builtin.file:
+    path: "{{ coach_state_directory }}"
+    state: directory
+    owner: "{{ coach_user }}"
+    group: "{{ coach_group }}"
+    mode: "0700"
+
+- name: Ensure the restricted Coach PostgreSQL role exists
+  community.postgresql.postgresql_user:
+    name: "{{ coach_db_user }}"
+    role_attr_flags: LOGIN,NOSUPERUSER,NOCREATEDB,NOCREATEROLE,NOREPLICATION
+    state: present
+  become_user: postgres
+
+- name: Check the desired Coach PostgreSQL credential
+  ansible.builtin.command:
+    argv:
+      - psql
+      - --no-psqlrc
+      - "--host={{ coach_db_host }}"
+      - "--port={{ coach_db_port }}"
+      - "--username={{ coach_db_user }}"
+      - --dbname=postgres
+      - --tuples-only
+      - --no-align
+      - --command=SELECT 1
+  environment:
+    PGPASSWORD: "{{ coach_secrets.db_password }}"
+  register: coach_db_credential_check
+  check_mode: false
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: Set the Coach PostgreSQL credential when required
+  community.postgresql.postgresql_user:
+    name: "{{ coach_db_user }}"
+    password: "{{ coach_secrets.db_password }}"
+    encrypted: true
+    role_attr_flags: LOGIN,NOSUPERUSER,NOCREATEDB,NOCREATEROLE,NOREPLICATION
+    state: present
+  become_user: postgres
+  when: coach_db_credential_check.rc != 0
+  no_log: true
+
+- name: Create the Coach database
+  community.postgresql.postgresql_db:
+    name: "{{ coach_db_name }}"
+    owner: "{{ coach_db_user }}"
+    encoding: UTF8
+    template: template0
+    state: present
+  become_user: postgres
+
+- name: Read the Coach PostgreSQL security attributes
+  ansible.builtin.command:
+    argv:
+      - psql
+      - --no-psqlrc
+      - --tuples-only
+      - --no-align
+      - >-
+        --command=SELECT rolcanlogin, rolsuper, rolcreatedb, rolcreaterole,
+        rolreplication FROM pg_roles WHERE rolname = '{{ coach_db_user }}'
+  become_user: postgres
+  register: coach_db_role_attributes
+  check_mode: false
+  changed_when: false
+
+- name: Read the Coach PostgreSQL password verifier type
+  ansible.builtin.command:
+    argv:
+      - psql
+      - --no-psqlrc
+      - --tuples-only
+      - --no-align
+      - >-
+        --command=SELECT passwd LIKE 'SCRAM-SHA-256$%'
+        FROM pg_shadow WHERE usename = '{{ coach_db_user }}'
+  become_user: postgres
+  register: coach_db_password_verifier
+  check_mode: false
+  changed_when: false
+
+- name: Require a non-privileged SCRAM Coach PostgreSQL login
+  ansible.builtin.assert:
+    that:
+      - coach_db_role_attributes.stdout | trim == 't|f|f|f|f'
+      - coach_db_password_verifier.stdout | trim == 't'
+    fail_msg: The Coach PostgreSQL role is elevated or does not use SCRAM.
+    quiet: true
+
+- name: Render the protected Coach runtime configuration
+  ansible.builtin.set_fact:
+    coach_runtime_secret_files:
+      - path: "{{ coach_environment_path }}"
+        group: "{{ coach_group }}"
+        content: >-
+          {{ lookup('ansible.builtin.template', role_path ~ '/templates/coach.env.j2') }}
+  no_log: true
+
+- name: Install the protected Coach runtime configuration
+  ansible.builtin.include_role:
+    name: runtime_secrets
+  vars:
+    runtime_secret_files: "{{ coach_runtime_secret_files }}"
+  no_log: true
+
+- name: Install the hardened Coach systemd unit
+  ansible.builtin.template:
+    src: coach.service.j2
+    dest: /etc/systemd/system/coach.service
+    owner: root
+    group: root
+    mode: "0644"
+  register: coach_systemd_unit
+
+- name: Load the Coach unit before release activation
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: coach_systemd_unit.changed
+
+- name: Converge the restricted Coach binary release
+  ansible.builtin.include_role:
+    name: binary_release
+  vars:
+    binary_release_name: coach
+    binary_release_service_unit: coach.service
+    binary_release_binary_path: bin/coach
+    binary_release_deploy_user: "{{ coach_deploy_user }}"
+    binary_release_deploy_group: "{{ coach_deploy_group }}"
+    binary_release_deploy_home: "{{ coach_deploy_home }}"
+    binary_release_deploy_public_key: "{{ coach_deploy_public_key }}"
+    binary_release_deploy_command_path: "{{ coach_deploy_command_path }}"
+    binary_release_incoming_directory: "{{ coach_incoming_directory }}"
+    binary_release_install_root: "{{ coach_install_root }}"
+    binary_release_release_root: "{{ coach_release_root }}"
+    binary_release_current_path: "{{ coach_current_path }}"
+    binary_release_retention: "{{ coach_release_retention }}"
+    binary_release_max_artifact_bytes: "{{ coach_max_artifact_bytes }}"
+    binary_release_max_extracted_bytes: "{{ coach_max_extracted_bytes }}"
+    binary_release_max_archive_members: "{{ coach_max_archive_members }}"
+    binary_release_artifact_path: "{{ coach_release_artifact_path }}"
+
+- name: Enable and converge Coach
+  ansible.builtin.systemd_service:
+    name: coach.service
+    enabled: true
+    daemon_reload: true
+    state: >-
+      {{ 'restarted'
+         if ((runtime_secret_install_results.changed or coach_systemd_unit.changed)
+             and coach_release_artifact_path | length == 0)
+         else 'started' }}
+
+- name: Wait for Coach on loopback
+  ansible.builtin.uri:
+    url: "http://{{ coach_host }}:{{ coach_port }}/health"
+    method: GET
+    status_code: 200
+    return_content: true
+  register: coach_loopback_health
+  retries: 15
+  delay: 2
+  until:
+    - coach_loopback_health.status == 200
+    - coach_loopback_health.content | trim == 'Healthy'
+  when: not ansible_check_mode
+
+- name: Read the migrated Coach schema
+  ansible.builtin.command:
+    argv:
+      - psql
+      - --no-psqlrc
+      - "--dbname={{ coach_db_name }}"
+      - --tuples-only
+      - --no-align
+      - >-
+        --command=SELECT count(*) FROM pg_tables
+        WHERE schemaname = 'public'
+        AND tablename = ANY (ARRAY['focus_sessions', 'agent_lock',
+        'attention_intervals', 'lock_decisions', 'temptations'])
+        AND tableowner = '{{ coach_db_user }}'
+  become_user: postgres
+  register: coach_schema_tables
+  check_mode: false
+  changed_when: false
+
+- name: Require the complete Coach PostgreSQL schema
+  ansible.builtin.assert:
+    that:
+      - coach_schema_tables.stdout | trim | int == 5
+    fail_msg: Coach did not create its complete PostgreSQL schema as its own role.
+    quiet: true
+  when: not ansible_check_mode
+
+- name: Read active TCP listeners for Coach verification
+  ansible.builtin.command:
+    argv:
+      - ss
+      - -H
+      - -lntp
+  register: coach_active_listeners
+  check_mode: false
+  changed_when: false
+
+- name: Require a loopback-only Coach listener and no PocketBase listener
+  ansible.builtin.assert:
+    that:
+      - >-
+        coach_active_listeners.stdout
+        is regex('(?m)^LISTEN .*127\\.0\\.0\\.1:' ~ coach_port ~ '\\s')
+      - >-
+        coach_active_listeners.stdout
+        is not regex('(?m)^LISTEN .*0\\.0\\.0\\.0:' ~ coach_port ~ '\\s')
+      - >-
+        coach_active_listeners.stdout
+        is not regex('(?m)^LISTEN .*\\[::\\]:' ~ coach_port ~ '\\s')
+      - >-
+        coach_active_listeners.stdout
+        is not regex('(?m)^LISTEN .*:8090\\s')
+    fail_msg: Coach or an obsolete PocketBase process has an unsafe listener.
+    quiet: true
+
+- name: Inspect the Coach Caddy route before convergence
+  ansible.builtin.stat:
+    path: "{{ caddy_sites_directory }}/60-coach.caddy"
+  register: coach_caddy_route_before_apply
+
+- name: Install the authenticated Coach Caddy route
+  ansible.builtin.template:
+    src: 60-coach.caddy.j2
+    dest: "{{ caddy_sites_directory }}/60-coach.caddy"
+    owner: root
+    group: caddy
+    mode: "0640"
+  register: coach_caddy_route
+  diff: false
+  no_log: true
+
+- name: Require canonical formatting for the Coach Caddy route
+  ansible.builtin.command:
+    argv:
+      - caddy
+      - fmt
+      - --diff
+      - "{{ caddy_sites_directory }}/60-coach.caddy"
+  become_user: caddy
+  register: coach_caddy_format
+  check_mode: false
+  changed_when: false
+  failed_when: >-
+    coach_caddy_format.rc != 0 or
+    coach_caddy_format.stdout is regex('(?m)^[+-] ')
+  when:
+    - not ansible_check_mode or coach_caddy_route_before_apply.stat.exists
+  no_log: true
+
+- name: Validate Caddy after adding the Coach route
+  ansible.builtin.command:
+    argv:
+      - caddy
+      - validate
+      - --config
+      - /etc/caddy/Caddyfile
+      - --adapter
+      - caddyfile
+  become_user: caddy
+  environment:
+    HOME: /var/lib/caddy
+    XDG_CONFIG_HOME: /var/lib/caddy/.config
+    XDG_DATA_HOME: /var/lib/caddy/.local/share
+  check_mode: false
+  changed_when: false
+  when:
+    - not ansible_check_mode or coach_caddy_route_before_apply.stat.exists
+  no_log: true
+
+- name: Read Caddy's active configuration for Coach
+  ansible.builtin.command:
+    argv:
+      - curl
+      - --silent
+      - --show-error
+      - --fail
+      - http://127.0.0.1:2019/config/
+  register: coach_active_caddy_config
+  check_mode: false
+  changed_when: false
+  when: not ansible_check_mode
+  no_log: true
+
+- name: Gracefully activate the Coach Caddy route
+  ansible.builtin.systemd_service:
+    name: caddy.service
+    state: reloaded
+  when:
+    - not ansible_check_mode
+    - >-
+      coach_caddy_route.changed or
+      coach_domain not in coach_active_caddy_config.stdout
+
+- name: Check that public Coach access requires authentication
+  ansible.builtin.command:
+    argv:
+      - curl
+      - --silent
+      - --show-error
+      - --output
+      - /dev/null
+      - --write-out
+      - "%{http_code}"
+      - --connect-timeout
+      - "5"
+      - --max-time
+      - "20"
+      - --retry
+      - "12"
+      - --retry-delay
+      - "5"
+      - --retry-all-errors
+      - --noproxy
+      - "*"
+      - --resolve
+      - "{{ coach_domain }}:443:127.0.0.1"
+      - "https://{{ coach_domain }}/health"
+  register: coach_public_unauthenticated
+  check_mode: false
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Check that an invalid Coach bearer token is rejected
+  ansible.builtin.command:
+    argv:
+      - curl
+      - --silent
+      - --show-error
+      - --output
+      - /dev/null
+      - --write-out
+      - "%{http_code}"
+      - --header
+      - "Authorization: Bearer invalid"
+      - --noproxy
+      - "*"
+      - --resolve
+      - "{{ coach_domain }}:443:127.0.0.1"
+      - "https://{{ coach_domain }}/health"
+  register: coach_public_invalid_bearer
+  check_mode: false
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Check authenticated Coach machine routes
+  ansible.builtin.command:
+    argv: "{{ item.argv }}"
+  loop:
+    - label: bearer PostgreSQL history
+      argv:
+        - curl
+        - --silent
+        - --show-error
+        - --output
+        - /dev/null
+        - --write-out
+        - "%{http_code}"
+        - --header
+        - "Authorization: Bearer {{ coach_secrets.api_token }}"
+        - --noproxy
+        - "*"
+        - --resolve
+        - "{{ coach_domain }}:443:127.0.0.1"
+        - "https://{{ coach_domain }}/history?days=1"
+    - label: query-token health
+      argv:
+        - curl
+        - --silent
+        - --show-error
+        - --output
+        - /dev/null
+        - --write-out
+        - "%{http_code}"
+        - --noproxy
+        - "*"
+        - --resolve
+        - "{{ coach_domain }}:443:127.0.0.1"
+        - "https://{{ coach_domain }}/health?token={{ coach_secrets.api_token }}"
+    - label: bearer unknown path
+      argv:
+        - curl
+        - --silent
+        - --show-error
+        - --output
+        - /dev/null
+        - --write-out
+        - "%{http_code}"
+        - --header
+        - "Authorization: Bearer {{ coach_secrets.api_token }}"
+        - --noproxy
+        - "*"
+        - --resolve
+        - "{{ coach_domain }}:443:127.0.0.1"
+        - "https://{{ coach_domain }}/infra-negative-probe"
+  loop_control:
+    label: "{{ item.label }}"
+  register: coach_public_machine_routes
+  check_mode: false
+  changed_when: false
+  when: not ansible_check_mode
+  no_log: true
+
+- name: Check the browser-authenticated Coach administration page
+  ansible.builtin.command:
+    argv:
+      - curl
+      - --silent
+      - --show-error
+      - --output
+      - /dev/null
+      - --write-out
+      - "%{http_code}"
+      - --user
+      - "{{ coach_basic_auth_username }}:{{ coach_secrets.basic_password }}"
+      - --noproxy
+      - "*"
+      - --resolve
+      - "{{ coach_domain }}:443:127.0.0.1"
+      - "https://{{ coach_domain }}/admin/"
+  register: coach_public_admin
+  check_mode: false
+  changed_when: false
+  when: not ansible_check_mode
+  no_log: true
+
+- name: Read recent Caddy entries after Coach authentication checks
+  ansible.builtin.command:
+    argv:
+      - tail
+      - --lines=200
+      - "{{ caddy_access_log_path }}"
+  register: coach_recent_access_log_entries
+  check_mode: false
+  changed_when: false
+  when: not ansible_check_mode
+  no_log: true
+
+- name: Require Coach credentials to be absent from access logs
+  ansible.builtin.assert:
+    that:
+      - coach_secrets.api_token not in coach_recent_access_log_entries.stdout
+      - coach_secrets.basic_password not in coach_recent_access_log_entries.stdout
+      - >-
+        ((coach_basic_auth_username ~ ':' ~ coach_secrets.basic_password)
+         | b64encode) not in coach_recent_access_log_entries.stdout
+    fail_msg: A Coach credential reached the structured Caddy access log.
+    quiet: true
+  when: not ansible_check_mode
+  no_log: true
+
+- name: Require the reviewed public Coach authentication boundary
+  ansible.builtin.assert:
+    that:
+      - coach_public_unauthenticated.stdout | trim == '401'
+      - coach_public_invalid_bearer.stdout | trim == '401'
+      - >-
+        coach_public_machine_routes.results
+        | map(attribute='stdout')
+        | map('trim')
+        | list == ['200', '200', '404']
+      - coach_public_admin.stdout | trim == '200'
+    fail_msg: The public Coach authentication or routing boundary is invalid.
+    quiet: true
+  when: not ansible_check_mode
+  no_log: true

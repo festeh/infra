@@ -1,0 +1,40 @@
+# Managed by Ansible. My Agents itself remains loopback-only.
+{{ my_agents_domain }} {
+	import infra_site
+	encode zstd gzip
+
+	header {
+		Referrer-Policy "no-referrer"
+		X-Frame-Options "DENY"
+	}
+
+	@authenticated_health {
+		path /api/health
+		header Authorization "Bearer {{ my_agents_secrets.api_token }}"
+	}
+	handle @authenticated_health {
+		reverse_proxy {{ my_agents_host }}:{{ my_agents_port }} {
+			header_up -Authorization
+			header_up -Cookie
+		}
+	}
+
+	@authenticated_coach_socket {
+		path /api/coach/ws/*
+		query token={{ my_agents_secrets.api_token }}
+	}
+	handle @authenticated_coach_socket {
+		uri query -token
+		reverse_proxy {{ my_agents_host }}:{{ my_agents_port }} {
+			header_up -Authorization
+			header_up -Cookie
+		}
+	}
+
+	@protected_agent_routes path /api/health /api/coach/ws/*
+	handle @protected_agent_routes {
+		respond "Authentication required" 401
+	}
+
+	respond 404
+}

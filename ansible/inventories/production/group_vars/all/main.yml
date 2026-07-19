@@ -7,6 +7,12 @@ dimalip_deploy_public_key: >-
 papujki_deploy_public_key: >-
   ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP5Y4CNIjMfvYPhySGUI2EV6L1dFTDGCNWqQVH4T/n5F github-actions-papujki-20260718
 
+coach_deploy_public_key: >-
+  ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIurDnma4smAMbux82xE2hwkxifhES2bybG3TZxucQ3B github-actions-coach-20260718
+
+my_agents_deploy_public_key: >-
+  ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILyGtyyaBi0VlRjjLht7FLxhdYeKuew3cJE4LD+R1I8/ github-actions-my-agents-20260719
+
 # A listener on loopback is always accepted. Every TCP/UDP socket on another
 # address must match protocol, port, and process here. `ss` truncates Linux
 # process names to 15 characters, hence `systemd-network` below.

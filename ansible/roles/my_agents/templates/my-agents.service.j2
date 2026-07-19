@@ -1,0 +1,57 @@
+[Unit]
+Description=Coach AI agent service
+Wants=network-online.target
+After=network-online.target coach.service cliproxyapi.service
+Requires=coach.service cliproxyapi.service
+
+[Service]
+Type=simple
+User={{ my_agents_user }}
+Group={{ my_agents_group }}
+WorkingDirectory={{ my_agents_state_directory }}
+Environment=HOME={{ my_agents_state_directory }}
+EnvironmentFile={{ my_agents_environment_path }}
+ExecStart={{ my_agents_current_path }}/.venv/bin/python -m my_agents.agents_server
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+UMask=0077
+LimitNOFILE=4096
+TasksMax=128
+MemoryMax=1G
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=my-agents
+
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectHostname=true
+ProtectClock=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectProc=invisible
+ProcSubset=pid
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RemoveIPC=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressDeny=any
+IPAddressAllow=localhost
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadOnlyPaths={{ my_agents_install_root }} {{ my_agents_config_directory }}
+ReadWritePaths={{ my_agents_state_directory }}
+InaccessiblePaths={{ my_agents_deploy_home }} {{ my_agents_deploy_cache_directory }}
+
+[Install]
+WantedBy=multi-user.target

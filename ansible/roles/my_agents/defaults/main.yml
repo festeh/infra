@@ -1,0 +1,46 @@
+---
+my_agents_user: my-agents
+my_agents_group: my-agents
+my_agents_state_directory: /var/lib/my-agents
+my_agents_config_directory: /etc/my-agents
+my_agents_environment_path: "{{ my_agents_config_directory }}/my-agents.env"
+
+my_agents_host: 127.0.0.1
+my_agents_port: 8001
+my_agents_domain: agents.dimalip.in
+my_agents_python_path: /usr/bin/python3.14
+
+my_agents_deploy_user: my-agents-deploy
+my_agents_deploy_group: my-agents-deploy
+my_agents_deploy_home: /var/lib/my-agents-deploy
+my_agents_deploy_public_key: ""
+my_agents_deploy_command_path: /usr/local/libexec/my-agents-deploy-command
+my_agents_incoming_directory: "{{ my_agents_deploy_home }}/incoming"
+my_agents_deploy_cache_directory: /var/cache/my-agents-deploy
+
+my_agents_install_root: /opt/my-agents
+my_agents_release_root: "{{ my_agents_install_root }}/releases"
+my_agents_current_path: "{{ my_agents_install_root }}/current"
+my_agents_retention: 3
+my_agents_max_artifact_bytes: 10485760
+my_agents_max_extracted_bytes: 52428800
+my_agents_max_archive_members: 300
+my_agents_sync_timeout_seconds: 1200
+my_agents_release_artifact_path: ""
+my_agents_controller_source_directory: >-
+  {{ lookup('ansible.builtin.env', 'HOME') }}/projects/my-agents
+
+my_agents_allowed_top_level_paths:
+  - REVISION
+  - models.json
+  - my_agents
+  - pyproject.toml
+  - uv.lock
+my_agents_required_files:
+  - REVISION
+  - my_agents/__init__.py
+  - my_agents/agents_server.py
+  - my_agents/coach/AGENTS.md
+  - my_agents/coach/agent.py
+  - pyproject.toml
+  - uv.lock

@@ -32,6 +32,12 @@
     - role: papujki
       tags:
         - papujki
+    - role: coach
+      tags:
+        - coach
+    - role: my_agents
+      tags:
+        - my_agents
     - role: runtime_secrets
       tags:
         - secrets

@@ -1,0 +1,555 @@
+---
+- name: Load the encrypted My Agents secret mapping
+  ansible.builtin.set_fact:
+    my_agents_secrets:
+      api_token: "{{ (vault_coach_secrets | default({})).get('api_token', '') }}"
+      cliproxyapi_api_key: >-
+        {{ ((vault_service_secrets | default({})).get('cliproxyapi', {})).get('api_key', '') }}
+  no_log: true
+
+- name: Require a complete and safe My Agents declaration
+  ansible.builtin.assert:
+    that:
+      - my_agents_host == '127.0.0.1'
+      - my_agents_port | int == 8001
+      - my_agents_domain is match('^[a-z0-9.-]+$')
+      - my_agents_python_path == '/usr/bin/python3.14'
+      - >-
+        my_agents_deploy_public_key
+        is match('^ssh-ed25519 [A-Za-z0-9+/]+={0,3}( .*)?$')
+      - my_agents_secrets.api_token is match('^[0-9a-f]{64}$')
+      - my_agents_secrets.cliproxyapi_api_key | length >= 32
+      - my_agents_secrets.api_token != my_agents_secrets.cliproxyapi_api_key
+    fail_msg: The encrypted My Agents credentials or service declaration are invalid.
+    quiet: true
+  no_log: true
+
+- name: Check whether the My Agents service account already exists
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ my_agents_user }}"
+    fail_key: false
+  check_mode: false
+  changed_when: false
+
+- name: Record whether My Agents existed before this run
+  ansible.builtin.set_fact:
+    my_agents_user_existed_before_apply: >-
+      {{ ansible_facts.getent_passwd.get(my_agents_user) is not none }}
+
+- name: Create the My Agents system group
+  ansible.builtin.group:
+    name: "{{ my_agents_group }}"
+    system: true
+
+- name: Create the unprivileged My Agents service account
+  ansible.builtin.user:
+    name: "{{ my_agents_user }}"
+    group: "{{ my_agents_group }}"
+    home: "{{ my_agents_state_directory }}"
+    shell: /usr/sbin/nologin
+    system: true
+    create_home: false
+    password_lock: true
+
+- name: Defer a first-time My Agents installation during check mode
+  ansible.builtin.meta: end_role
+  when:
+    - ansible_check_mode
+    - not my_agents_user_existed_before_apply
+
+- name: Create the protected My Agents state directory
+  ansible.builtin.file:
+    path: "{{ my_agents_state_directory }}"
+    state: directory
+    owner: "{{ my_agents_user }}"
+    group: "{{ my_agents_group }}"
+    mode: "0700"
+
+- name: Render the protected My Agents runtime configuration
+  ansible.builtin.set_fact:
+    my_agents_runtime_secret_files:
+      - path: "{{ my_agents_environment_path }}"
+        group: "{{ my_agents_group }}"
+        content: >-
+          {{ lookup('ansible.builtin.template', role_path ~ '/templates/my-agents.env.j2') }}
+  no_log: true
+
+- name: Install the protected My Agents runtime configuration
+  ansible.builtin.include_role:
+    name: runtime_secrets
+  vars:
+    runtime_secret_files: "{{ my_agents_runtime_secret_files }}"
+  no_log: true
+
+- name: Install the hardened My Agents systemd unit
+  ansible.builtin.template:
+    src: my-agents.service.j2
+    dest: /etc/systemd/system/my-agents.service
+    owner: root
+    group: root
+    mode: "0644"
+  register: my_agents_systemd_unit
+
+- name: Load the My Agents unit before release activation
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: my_agents_systemd_unit.changed
+
+- name: Inspect the active My Agents release before convergence
+  ansible.builtin.stat:
+    path: "{{ my_agents_current_path }}"
+    follow: false
+  register: my_agents_current_before_apply
+
+- name: Inspect the controller My Agents release inputs
+  ansible.builtin.stat:
+    path: "{{ my_agents_controller_source_directory }}/{{ item }}"
+  loop:
+    - pyproject.toml
+    - uv.lock
+    - models.json
+    - my_agents/agents_server.py
+    - my_agents/coach/AGENTS.md
+  delegate_to: localhost
+  become: false
+  register: my_agents_controller_inputs
+  when:
+    - my_agents_release_artifact_path | length == 0
+    - not my_agents_current_before_apply.stat.islnk | default(false)
+
+- name: Require complete controller My Agents release inputs
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isreg
+      - not item.stat.islnk
+    fail_msg: "Missing or invalid My Agents release input: {{ item.item }}"
+    quiet: true
+  loop: "{{ my_agents_controller_inputs.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when:
+    - my_agents_release_artifact_path | length == 0
+    - not my_agents_current_before_apply.stat.islnk | default(false)
+
+- name: Create a local initial My Agents release workspace
+  ansible.builtin.tempfile:
+    state: directory
+    prefix: my-agents-ansible-
+  delegate_to: localhost
+  become: false
+  register: my_agents_initial_workspace
+  when:
+    - my_agents_release_artifact_path | length == 0
+    - not my_agents_current_before_apply.stat.islnk | default(false)
+
+- name: Read the controller My Agents revision
+  ansible.builtin.command:
+    argv:
+      - git
+      - -C
+      - "{{ my_agents_controller_source_directory }}"
+      - rev-parse
+      - HEAD
+  delegate_to: localhost
+  become: false
+  register: my_agents_controller_revision
+  check_mode: false
+  changed_when: false
+  when:
+    - my_agents_release_artifact_path | length == 0
+    - not my_agents_current_before_apply.stat.islnk | default(false)
+
+- name: Read the controller My Agents worktree state
+  ansible.builtin.command:
+    argv:
+      - git
+      - -C
+      - "{{ my_agents_controller_source_directory }}"
+      - status
+      - --porcelain
+      - --untracked-files=no
+  delegate_to: localhost
+  become: false
+  register: my_agents_controller_worktree
+  check_mode: false
+  changed_when: false
+  when:
+    - my_agents_release_artifact_path | length == 0
+    - not my_agents_current_before_apply.stat.islnk | default(false)
+
+- name: Write the initial My Agents release revision
+  ansible.builtin.copy:
+    content: >-
+      {{ my_agents_controller_revision.stdout | trim }}{{ '-working-tree'
+         if my_agents_controller_worktree.stdout | length > 0 else '' }}
+    dest: "{{ my_agents_initial_workspace.path }}/REVISION"
+    mode: "0644"
+  delegate_to: localhost
+  become: false
+  when:
+    - my_agents_release_artifact_path | length == 0
+    - not my_agents_current_before_apply.stat.islnk | default(false)
+
+- name: Build the initial locked My Agents source artifact
+  ansible.builtin.command:
+    argv:
+      - tar
+      - --sort=name
+      - --mtime=@0
+      - --owner=0
+      - --group=0
+      - --numeric-owner
+      - --exclude=__pycache__
+      - --exclude=*.pyc
+      - --exclude=*.pyo
+      - -czf
+      - "{{ my_agents_initial_workspace.path }}/my-agents.tar.gz"
+      - -C
+      - "{{ my_agents_controller_source_directory }}"
+      - pyproject.toml
+      - uv.lock
+      - models.json
+      - my_agents
+      - -C
+      - "{{ my_agents_initial_workspace.path }}"
+      - REVISION
+  delegate_to: localhost
+  become: false
+  changed_when: true
+  when:
+    - my_agents_release_artifact_path | length == 0
+    - not my_agents_current_before_apply.stat.islnk | default(false)
+
+- name: Select the effective My Agents initial artifact
+  ansible.builtin.set_fact:
+    my_agents_effective_release_artifact_path: >-
+      {{ my_agents_release_artifact_path
+         if my_agents_release_artifact_path | length > 0
+         else (my_agents_initial_workspace.path ~ '/my-agents.tar.gz'
+               if not my_agents_current_before_apply.stat.islnk | default(false)
+               else '') }}
+
+- name: Converge the restricted My Agents uv release
+  ansible.builtin.include_role:
+    name: uv_release
+  vars:
+    uv_release_name: my-agents
+    uv_release_service_unit: my-agents.service
+    uv_release_entry_module: my_agents.agents_server
+    uv_release_deploy_user: "{{ my_agents_deploy_user }}"
+    uv_release_deploy_group: "{{ my_agents_deploy_group }}"
+    uv_release_deploy_home: "{{ my_agents_deploy_home }}"
+    uv_release_deploy_public_key: "{{ my_agents_deploy_public_key }}"
+    uv_release_deploy_command_path: "{{ my_agents_deploy_command_path }}"
+    uv_release_incoming_directory: "{{ my_agents_incoming_directory }}"
+    uv_release_cache_directory: "{{ my_agents_deploy_cache_directory }}"
+    uv_release_install_root: "{{ my_agents_install_root }}"
+    uv_release_release_root: "{{ my_agents_release_root }}"
+    uv_release_current_path: "{{ my_agents_current_path }}"
+    uv_release_allowed_top_level_paths: "{{ my_agents_allowed_top_level_paths }}"
+    uv_release_required_files: "{{ my_agents_required_files }}"
+    uv_release_retention: "{{ my_agents_retention }}"
+    uv_release_max_artifact_bytes: "{{ my_agents_max_artifact_bytes }}"
+    uv_release_max_extracted_bytes: "{{ my_agents_max_extracted_bytes }}"
+    uv_release_max_archive_members: "{{ my_agents_max_archive_members }}"
+    uv_release_sync_timeout_seconds: "{{ my_agents_sync_timeout_seconds }}"
+    uv_release_python_path: "{{ my_agents_python_path }}"
+    uv_release_artifact_path: "{{ my_agents_effective_release_artifact_path }}"
+
+- name: Enable and converge My Agents
+  ansible.builtin.systemd_service:
+    name: my-agents.service
+    enabled: true
+    daemon_reload: true
+    state: >-
+      {{ 'restarted'
+         if ((runtime_secret_install_results.changed or my_agents_systemd_unit.changed)
+             and my_agents_effective_release_artifact_path | length == 0)
+         else 'started' }}
+
+- name: Remove the local initial My Agents release workspace
+  ansible.builtin.file:
+    path: "{{ my_agents_initial_workspace.path }}"
+    state: absent
+  delegate_to: localhost
+  become: false
+  when: my_agents_initial_workspace.path is defined
+
+- name: Wait for My Agents on loopback
+  ansible.builtin.uri:
+    url: "http://{{ my_agents_host }}:{{ my_agents_port }}/api/health"
+    method: GET
+    status_code: 200
+    return_content: true
+  register: my_agents_loopback_health
+  retries: 30
+  delay: 2
+  until:
+    - my_agents_loopback_health.status == 200
+    - my_agents_loopback_health.json.status | default('') == 'ok'
+  when: not ansible_check_mode
+
+- name: Read the registered My Agents agents
+  ansible.builtin.uri:
+    url: "http://{{ my_agents_host }}:{{ my_agents_port }}/api/agents"
+    method: GET
+    status_code: 200
+    return_content: true
+  register: my_agents_registered_agents
+  when: not ansible_check_mode
+
+- name: Require Coach to be the only registered agent
+  ansible.builtin.assert:
+    that:
+      - my_agents_registered_agents.json | map(attribute='name') | list == ['coach']
+    fail_msg: My Agents exposed an unexpected agent set.
+    quiet: true
+  when: not ansible_check_mode
+
+- name: Verify My Agents can authenticate to CLIProxyAPI
+  ansible.builtin.uri:
+    url: "http://{{ my_agents_host }}:{{ my_agents_port }}/api/models"
+    method: GET
+    status_code: 200
+    return_content: true
+  register: my_agents_models
+  no_log: true
+  when: not ansible_check_mode
+
+- name: Require at least one model through the local proxy
+  ansible.builtin.assert:
+    that:
+      - my_agents_models.json | length > 0
+    fail_msg: My Agents could not discover any CLIProxyAPI models.
+    quiet: true
+  when: not ansible_check_mode
+  no_log: true
+
+- name: Read active TCP listeners for My Agents verification
+  ansible.builtin.command:
+    argv:
+      - ss
+      - -H
+      - -lntp
+  register: my_agents_active_listeners
+  check_mode: false
+  changed_when: false
+
+- name: Require a loopback-only My Agents listener
+  ansible.builtin.assert:
+    that:
+      - >-
+        my_agents_active_listeners.stdout
+        is regex('(?m)^LISTEN .*127\\.0\\.0\\.1:' ~ my_agents_port ~ '\\s')
+      - >-
+        my_agents_active_listeners.stdout
+        is not regex('(?m)^LISTEN .*0\\.0\\.0\\.0:' ~ my_agents_port ~ '\\s')
+      - >-
+        my_agents_active_listeners.stdout
+        is not regex('(?m)^LISTEN .*\\[::\\]:' ~ my_agents_port ~ '\\s')
+    fail_msg: "Unexpected My Agents listener: {{ my_agents_active_listeners.stdout_lines }}"
+    quiet: true
+  when: not ansible_check_mode
+
+- name: Inspect the My Agents Caddy route before convergence
+  ansible.builtin.stat:
+    path: "{{ caddy_sites_directory }}/70-my-agents.caddy"
+  register: my_agents_caddy_route_before_apply
+
+- name: Install the authenticated My Agents Caddy route
+  ansible.builtin.template:
+    src: 70-my-agents.caddy.j2
+    dest: "{{ caddy_sites_directory }}/70-my-agents.caddy"
+    owner: root
+    group: caddy
+    mode: "0640"
+  register: my_agents_caddy_route
+  diff: false
+  no_log: true
+
+- name: Require canonical formatting for the My Agents Caddy route
+  ansible.builtin.command:
+    argv:
+      - caddy
+      - fmt
+      - --diff
+      - "{{ caddy_sites_directory }}/70-my-agents.caddy"
+  become_user: caddy
+  register: my_agents_caddy_format
+  check_mode: false
+  changed_when: false
+  failed_when: >-
+    my_agents_caddy_format.rc != 0 or
+    my_agents_caddy_format.stdout is regex('(?m)^[+-] ')
+  when:
+    - not ansible_check_mode or my_agents_caddy_route_before_apply.stat.exists
+  no_log: true
+
+- name: Validate Caddy after adding the My Agents route
+  ansible.builtin.command:
+    argv:
+      - caddy
+      - validate
+      - --config
+      - /etc/caddy/Caddyfile
+      - --adapter
+      - caddyfile
+  become_user: caddy
+  environment:
+    HOME: /var/lib/caddy
+    XDG_CONFIG_HOME: /var/lib/caddy/.config
+    XDG_DATA_HOME: /var/lib/caddy/.local/share
+  check_mode: false
+  changed_when: false
+  when:
+    - not ansible_check_mode or my_agents_caddy_route_before_apply.stat.exists
+  no_log: true
+
+- name: Read Caddy's active configuration for My Agents
+  ansible.builtin.command:
+    argv:
+      - curl
+      - --silent
+      - --show-error
+      - --fail
+      - http://127.0.0.1:2019/config/
+  register: my_agents_active_caddy_config
+  check_mode: false
+  changed_when: false
+  when: not ansible_check_mode
+  no_log: true
+
+- name: Gracefully activate the My Agents Caddy route
+  ansible.builtin.systemd_service:
+    name: caddy.service
+    state: reloaded
+  when:
+    - not ansible_check_mode
+    - >-
+      my_agents_caddy_route.changed or
+      my_agents_domain not in my_agents_active_caddy_config.stdout
+
+- name: Check the public My Agents authentication boundary
+  ansible.builtin.command:
+    argv: "{{ item.argv }}"
+  loop:
+    - label: unauthenticated health
+      expected: "401"
+      argv:
+        - curl
+        - --silent
+        - --show-error
+        - --output
+        - /dev/null
+        - --write-out
+        - "%{http_code}"
+        - --connect-timeout
+        - "5"
+        - --max-time
+        - "20"
+        - --retry
+        - "12"
+        - --retry-delay
+        - "5"
+        - --retry-all-errors
+        - --noproxy
+        - "*"
+        - --resolve
+        - "{{ my_agents_domain }}:443:127.0.0.1"
+        - "https://{{ my_agents_domain }}/api/health"
+    - label: invalid socket token
+      expected: "401"
+      argv:
+        - curl
+        - --silent
+        - --show-error
+        - --output
+        - /dev/null
+        - --write-out
+        - "%{http_code}"
+        - --noproxy
+        - "*"
+        - --resolve
+        - "{{ my_agents_domain }}:443:127.0.0.1"
+        - "https://{{ my_agents_domain }}/api/coach/ws/infra-probe?token=invalid"
+    - label: authenticated health
+      expected: "200"
+      argv:
+        - curl
+        - --silent
+        - --show-error
+        - --output
+        - /dev/null
+        - --write-out
+        - "%{http_code}"
+        - --header
+        - "Authorization: Bearer {{ my_agents_secrets.api_token }}"
+        - --noproxy
+        - "*"
+        - --resolve
+        - "{{ my_agents_domain }}:443:127.0.0.1"
+        - "https://{{ my_agents_domain }}/api/health"
+    - label: authenticated unknown route
+      expected: "404"
+      argv:
+        - curl
+        - --silent
+        - --show-error
+        - --output
+        - /dev/null
+        - --write-out
+        - "%{http_code}"
+        - --header
+        - "Authorization: Bearer {{ my_agents_secrets.api_token }}"
+        - --noproxy
+        - "*"
+        - --resolve
+        - "{{ my_agents_domain }}:443:127.0.0.1"
+        - "https://{{ my_agents_domain }}/infra-negative-probe"
+  loop_control:
+    label: "{{ item.label }}"
+  register: my_agents_public_boundary
+  check_mode: false
+  changed_when: false
+  when: not ansible_check_mode
+  no_log: true
+
+- name: Read recent Caddy entries after My Agents authentication checks
+  ansible.builtin.command:
+    argv:
+      - tail
+      - --lines=200
+      - "{{ caddy_access_log_path }}"
+  register: my_agents_recent_access_log_entries
+  check_mode: false
+  changed_when: false
+  when: not ansible_check_mode
+  no_log: true
+
+- name: Require My Agents credentials to be absent from access logs
+  ansible.builtin.assert:
+    that:
+      - my_agents_secrets.api_token not in my_agents_recent_access_log_entries.stdout
+      - my_agents_secrets.cliproxyapi_api_key not in my_agents_recent_access_log_entries.stdout
+    fail_msg: A My Agents credential reached the structured Caddy access log.
+    quiet: true
+  when: not ansible_check_mode
+  no_log: true
+
+- name: Require the reviewed public My Agents boundary
+  ansible.builtin.assert:
+    that:
+      - >-
+        my_agents_public_boundary.results
+        | map(attribute='stdout')
+        | map('trim')
+        | list == my_agents_public_boundary.results
+                   | map(attribute='item')
+                   | map(attribute='expected')
+                   | list
+    fail_msg: The public My Agents authentication or routing boundary is invalid.
+    quiet: true
+  when: not ansible_check_mode
+  no_log: true

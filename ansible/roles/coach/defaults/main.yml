@@ -1,0 +1,36 @@
+---
+coach_user: coach
+coach_group: coach
+coach_state_directory: /var/lib/coach
+coach_config_directory: /etc/coach
+coach_environment_path: "{{ coach_config_directory }}/coach.env"
+
+coach_host: 127.0.0.1
+coach_port: 8080
+coach_domain: coach.dimalip.in
+coach_basic_auth_username: dima
+
+coach_db_name: coach
+coach_db_user: coach
+coach_db_host: 127.0.0.1
+coach_db_port: 5432
+
+coach_deploy_user: coach-deploy
+coach_deploy_group: coach-deploy
+coach_deploy_home: /var/lib/coach-deploy
+coach_deploy_public_key: ""
+coach_deploy_command_path: /usr/local/libexec/coach-deploy-command
+coach_incoming_directory: "{{ coach_deploy_home }}/incoming"
+
+coach_install_root: /opt/coach
+coach_release_root: "{{ coach_install_root }}/releases"
+coach_current_path: "{{ coach_install_root }}/current"
+coach_binary_path: "{{ coach_current_path }}/bin/coach"
+coach_release_retention: 5
+coach_max_artifact_bytes: 26214400
+coach_max_extracted_bytes: 104857600
+coach_max_archive_members: 100
+
+# Supply only for the initial restoration. Routine pushes use the restricted
+# project workflow while Ansible verifies the resulting state.
+coach_release_artifact_path: ""
