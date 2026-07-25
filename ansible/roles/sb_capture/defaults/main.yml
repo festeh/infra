@@ -6,6 +6,12 @@ sb_capture_spool_directory: "{{ sb_capture_state_directory }}/spool"
 sb_capture_config_directory: /etc/sb-capture
 sb_capture_config_path: "{{ sb_capture_config_directory }}/config.toml"
 sb_capture_rclone_config_path: "{{ sb_capture_config_directory }}/rclone.conf"
+# rclone rewrites its config whenever it refreshes an access token, and does so
+# by creating a temporary file alongside it — which the protected, read-only
+# credential directory forbids. The service therefore works from a copy it owns
+# and reseeds from the canonical one, so refreshed tokens persist instead of
+# failing noisily on every upload.
+sb_capture_rclone_working_config: "{{ sb_capture_state_directory }}/rclone.conf"
 
 # Audio is trimmed and transcribed here and deleted immediately afterwards.
 # systemd's RuntimeDirectory is tmpfs, so a recording never reaches a disk on

@@ -195,6 +195,14 @@
     runtime_secret_files: "{{ sb_capture_runtime_secret_files }}"
   no_log: true
 
+# The unit reseeds this on start, but only when it is absent, so a rotated
+# credential would otherwise never reach the copy the service actually reads.
+- name: Discard the rclone working copy when the credential changes
+  ansible.builtin.file:
+    path: "{{ sb_capture_rclone_working_config }}"
+    state: absent
+  when: runtime_secret_install_results.changed
+
 - name: Install the hardened sb-capture systemd units
   ansible.builtin.template:
     src: "{{ item.src }}"

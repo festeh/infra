@@ -9,7 +9,11 @@ User={{ sb_capture_user }}
 Group={{ sb_capture_group }}
 WorkingDirectory={{ sb_capture_state_directory }}
 Environment=HOME={{ sb_capture_state_directory }}
-Environment=RCLONE_CONFIG={{ sb_capture_rclone_config_path }}
+Environment=RCLONE_CONFIG={{ sb_capture_rclone_working_config }}
+# rclone must be able to rewrite its own config when it refreshes a token,
+# so it works from a copy in the state directory. Seeded on demand; the role
+# deletes the copy whenever the canonical credential changes.
+ExecStartPre=/bin/sh -c 'test -f {{ sb_capture_rclone_working_config }} || install -m 0600 {{ sb_capture_rclone_config_path }} {{ sb_capture_rclone_working_config }}'
 ExecStart={{ sb_capture_binary_path }} drain {{ sb_capture_config_path }}
 # A drain that fails because Drive is still unreachable is expected; the spool
 # simply stays put until the next run.
