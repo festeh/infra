@@ -1,0 +1,29 @@
+# Managed by Ansible. Machine-only endpoint: the phone is the sole client, so
+# there is no browser route and no basic-auth fallback. sb-capture itself
+# remains loopback-only.
+{{ sb_capture_domain }} {
+	import infra_site
+	encode zstd gzip
+
+	header {
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Frame-Options "DENY"
+	}
+
+	@machine_bearer header Authorization "Bearer {{ sb_capture_secrets.api_token }}"
+	handle @machine_bearer {
+		# Recordings are a few hundred kilobytes and a transcription round trip
+		# is seconds, but a three-minute memo on a slow uplink needs room.
+		reverse_proxy {{ sb_capture_host }}:{{ sb_capture_port }} {
+			header_up -Cookie
+			transport http {
+				read_timeout 120s
+				write_timeout 120s
+			}
+		}
+	}
+
+	handle {
+		respond 404
+	}
+}

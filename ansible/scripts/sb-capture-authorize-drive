@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# One-time Google Drive consent for sb-capture.
+#
+# The only manual step in the whole deployment: rclone opens a browser, you
+# approve, and the resulting credential is encrypted straight into the
+# production vault. The plaintext token exists only in a mode-0600 temporary
+# file that is shredded on exit, and is never printed.
+#
+# The consent does not expire. rclone's OAuth client is a published app, so the
+# refresh token stays valid until it is revoked, the Google password changes,
+# or roughly six months of disuse.
+set -euo pipefail
+
+remote_name=gdrive
+vault_file="inventories/production/group_vars/all/sb_capture.vault.yml"
+# drive.file limits rclone to files it created itself, which is all an
+# upload-only archive needs. Pass "drive" for full account access.
+scope="${1:-drive.file}"
+
+cd "$(dirname "$0")/.."
+
+if ! command -v rclone >/dev/null 2>&1; then
+  echo "rclone is not installed on this machine. Install it with:" >&2
+  echo "  sudo pacman -S rclone" >&2
+  exit 1
+fi
+
+if [[ ! -f "$vault_file" ]]; then
+  echo "Missing $vault_file" >&2
+  exit 1
+fi
+
+if grep -q '^  rclone_config:' "$vault_file"; then
+  echo "rclone_config is already present in $vault_file." >&2
+  echo "Remove that key first if you intend to re-authorize." >&2
+  exit 1
+fi
+
+config="$(mktemp)"
+chmod 600 "$config"
+trap 'shred -u "$config" 2>/dev/null || rm -f "$config"' EXIT
+
+cat <<BANNER
+
+A browser window will open for Google consent. Approve access, then this
+script finishes on its own — there is nothing further to copy or paste, and
+this step is not needed again.
+
+BANNER
+
+# Non-interactive remote creation: rclone runs the OAuth flow, then writes a
+# complete config with the scope already set, so nothing has to be hand-built.
+rclone config create "$remote_name" drive "scope=$scope" --config "$config"
+
+if ! grep -q 'refresh_token' "$config"; then
+  echo >&2
+  echo "The stored token has no refresh_token, so it would stop working within" >&2
+  echo "an hour. Revoke the grant at https://myaccount.google.com/permissions" >&2
+  echo "and run this again." >&2
+  exit 1
+fi
+
+encrypted="$(
+  ansible-vault encrypt_string --encrypt-vault-id production \
+    --stdin-name rclone_config < "$config"
+)"
+
+VAULT_FILE="$vault_file" ENCRYPTED="$encrypted" python3 - <<'PY'
+import os
+import pathlib
+
+path = pathlib.Path(os.environ["VAULT_FILE"])
+lines = [line.strip() for line in os.environ["ENCRYPTED"].splitlines() if line.strip()]
+block = f"  {lines[0]}\n" + "\n".join("    " + line for line in lines[1:]) + "\n"
+
+text = path.read_text()
+if not text.endswith("\n"):
+    text += "\n"
+path.write_text(text + block)
+print(f"Wrote the encrypted Drive credential into {path}")
+PY
+
+cat <<'NEXT'
+
+Next, once capture.dimalip.in resolves:
+
+  just apply --tags sb_capture \
+    -e sb_capture_release_artifact_path=$HOME/projects/sb/target/x86_64-unknown-linux-musl/release/sb-capture-server
+
+NEXT

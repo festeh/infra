@@ -1,0 +1,46 @@
+[Unit]
+Description=Retry sb voice-capture archive uploads that Google Drive rejected
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User={{ sb_capture_user }}
+Group={{ sb_capture_group }}
+WorkingDirectory={{ sb_capture_state_directory }}
+Environment=HOME={{ sb_capture_state_directory }}
+Environment=RCLONE_CONFIG={{ sb_capture_rclone_config_path }}
+ExecStart={{ sb_capture_binary_path }} drain {{ sb_capture_config_path }}
+# A drain that fails because Drive is still unreachable is expected; the spool
+# simply stays put until the next run.
+SuccessExitStatus=0 1
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sb-capture-drain
+
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectHostname=true
+ProtectClock=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectProc=invisible
+ProcSubset=pid
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RemoveIPC=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressDeny=
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadOnlyPaths={{ sb_capture_install_root }} {{ sb_capture_config_directory }}
+ReadWritePaths={{ sb_capture_state_directory }}

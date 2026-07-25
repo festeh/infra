@@ -59,6 +59,10 @@ bootstrap expected_fingerprint:
     cd "{{ ansible_dir }}" && ansible-playbook -i "{{ inventory }}" playbooks/bootstrap-access.yml --ask-pass -e ansible_user=root
     cd "{{ ansible_dir }}" && ansible-playbook -i "{{ inventory }}" playbooks/harden-ssh.yml
 
+# Authorize Google Drive for sb-capture: one browser approval, once, ever.
+sb-capture-authorize scope="drive.file":
+    cd "{{ ansible_dir }}" && ./scripts/sb-capture-authorize-drive "{{ scope }}"
+
 # Converge the complete declared server state and run all safety checks.
 apply *ansible_args:
     cd "{{ ansible_dir }}" && ansible-playbook -i "{{ inventory }}" playbooks/site.yml {{ ansible_args }}

@@ -1,0 +1,475 @@
+---
+- name: Load the encrypted sb-capture secret mapping
+  ansible.builtin.set_fact:
+    sb_capture_secrets: "{{ vault_sb_capture_secrets | default({}) }}"
+  no_log: true
+
+# Installed ahead of the credential gate below. The Drive credential is
+# produced by running rclone on this host, so the tools cannot wait on the
+# secret that rclone itself generates.
+- name: Install the sb-capture media and archive tools
+  ansible.builtin.apt:
+    name: "{{ sb_capture_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+# The Google Drive credential can only be produced by an interactive browser
+# consent, so until it exists this service is declared but not deployable.
+# Announce that and stop, rather than failing the play and stranding every role
+# that converges after this one.
+- name: Report sb-capture as awaiting its Google Drive credential
+  ansible.builtin.debug:
+    msg: >-
+      sb-capture is declared but not deployed:
+      vault_sb_capture_secrets.rclone_config is absent. rclone is installed
+      here, so generate the credential on this host over an SSH tunnel
+      (ssh -L 53682:localhost:53682 ionos) and add it to
+      inventories/production/group_vars/all/sb_capture.vault.yml.
+  when: sb_capture_secrets.get('rclone_config', '') | length == 0
+
+- name: Skip sb-capture until its Google Drive credential exists
+  ansible.builtin.meta: end_role
+  when: sb_capture_secrets.get('rclone_config', '') | length == 0
+
+- name: Require a complete and safe sb-capture declaration
+  ansible.builtin.assert:
+    that:
+      - sb_capture_host == '127.0.0.1'
+      - sb_capture_port | int == 8092
+      - sb_capture_domain is match('^[a-z0-9.-]+$')
+      - sb_capture_install_root is match('^/opt/[A-Za-z0-9._-]+$')
+      - sb_capture_state_directory is match('^/var/lib/[A-Za-z0-9._-]+$')
+      - sb_capture_work_directory is match('^/run/[A-Za-z0-9._-]+$')
+      - sb_capture_rclone_remote is match('^[A-Za-z0-9_-]+:[A-Za-z0-9._/-]*$')
+      - sb_capture_secrets is mapping
+      - sb_capture_secrets.get('api_token', '') is match('^[0-9a-f]{64}$')
+      - sb_capture_secrets.get('elevenlabs_api_key', '') | length >= 20
+      - sb_capture_secrets.get('rclone_config', '') is search('\[gdrive\]')
+      - sb_capture_secrets.api_token != sb_capture_secrets.elevenlabs_api_key
+    fail_msg: The encrypted sb-capture credentials or service declaration are invalid.
+    quiet: true
+  no_log: true
+
+# Caddy cannot obtain a certificate for a name that does not resolve, and the
+# resulting failure surfaces far from its cause. Fail here instead.
+#
+# Asked of the zone's own nameserver rather than the controller's resolver: a
+# stub cache holding a stale answer would otherwise fail this check long after
+# the record was corrected, and certificate issuance does not depend on caches
+# either — Let's Encrypt resolves authoritatively.
+- name: Resolve the sb-capture public hostname authoritatively
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      nameserver="$(dig +short NS "{{ sb_capture_domain.split('.')[1:] | join('.') }}" | head -1)"
+      test -n "$nameserver"
+      dig +short "@${nameserver}" "{{ sb_capture_domain }}" A
+  delegate_to: localhost
+  become: false
+  register: sb_capture_domain_resolution
+  check_mode: false
+  changed_when: false
+  failed_when: false
+
+- name: Require the sb-capture hostname to point at this server
+  ansible.builtin.assert:
+    that:
+      - sb_capture_domain_resolution.rc == 0
+      # ansible_host is the SSH alias, not an address, so the server's own
+      # public address is what the A record has to match.
+      - ansible_facts['default_ipv4']['address'] in sb_capture_domain_resolution.stdout
+    fail_msg: >-
+      {{ sb_capture_domain }} does not resolve to
+      {{ ansible_facts['default_ipv4']['address'] }} at its authoritative
+      nameserver. Point the A record at this server before applying, otherwise
+      Caddy will fail certificate issuance for the route below. Any AAAA record
+      must go too: clients preferring IPv6 would bypass the A record entirely.
+    quiet: true
+
+- name: Check whether the sb-capture service account already exists
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ sb_capture_user }}"
+    fail_key: false
+  check_mode: false
+  changed_when: false
+
+- name: Record whether sb-capture existed before this run
+  ansible.builtin.set_fact:
+    sb_capture_user_existed_before_apply: >-
+      {{ ansible_facts.getent_passwd.get(sb_capture_user) is not none }}
+
+- name: Create the sb-capture system group
+  ansible.builtin.group:
+    name: "{{ sb_capture_group }}"
+    system: true
+
+- name: Create the unprivileged sb-capture service account
+  ansible.builtin.user:
+    name: "{{ sb_capture_user }}"
+    group: "{{ sb_capture_group }}"
+    home: "{{ sb_capture_state_directory }}"
+    shell: /usr/sbin/nologin
+    system: true
+    create_home: false
+    password_lock: true
+
+- name: Defer a first-time sb-capture installation during check mode
+  ansible.builtin.meta: end_role
+  when:
+    - ansible_check_mode
+    - not sb_capture_user_existed_before_apply
+
+- name: Create the protected sb-capture state directory
+  ansible.builtin.file:
+    path: "{{ sb_capture_state_directory }}"
+    state: directory
+    owner: "{{ sb_capture_user }}"
+    group: "{{ sb_capture_group }}"
+    mode: "0700"
+
+# The one place a recording persists, and only while Google Drive is refusing
+# uploads. The drain timer empties it.
+- name: Create the sb-capture archive spool
+  ansible.builtin.file:
+    path: "{{ sb_capture_spool_directory }}"
+    state: directory
+    owner: "{{ sb_capture_user }}"
+    group: "{{ sb_capture_group }}"
+    mode: "0700"
+
+- name: Create the sb-capture program directory
+  ansible.builtin.file:
+    path: "{{ sb_capture_install_root }}/bin"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+# Deliberately not the shared binary_release role: that exists so a CI workflow
+# can push releases without Vault access, and sb has no such workflow. Adding a
+# forced-command SSH identity here would be reachable attack surface serving no
+# deployment path that exists.
+- name: Install the sb-capture release binary
+  ansible.builtin.copy:
+    src: "{{ sb_capture_release_artifact_path }}"
+    dest: "{{ sb_capture_binary_path }}"
+    owner: root
+    group: root
+    mode: "0755"
+  when: sb_capture_release_artifact_path | length > 0
+  register: sb_capture_binary_install
+
+- name: Confirm the sb-capture binary is present
+  ansible.builtin.stat:
+    path: "{{ sb_capture_binary_path }}"
+  register: sb_capture_binary_state
+
+- name: Require an installed sb-capture binary
+  ansible.builtin.assert:
+    that:
+      - sb_capture_binary_state.stat.exists
+      - sb_capture_binary_state.stat.executable
+    fail_msg: >-
+      No sb-capture binary is installed. Supply
+      sb_capture_release_artifact_path for the first apply.
+    quiet: true
+
+- name: Render the protected sb-capture runtime configuration
+  ansible.builtin.set_fact:
+    sb_capture_runtime_secret_files:
+      - path: "{{ sb_capture_config_path }}"
+        group: "{{ sb_capture_group }}"
+        content: >-
+          {{ lookup('ansible.builtin.template', role_path ~ '/templates/config.toml.j2') }}
+      - path: "{{ sb_capture_rclone_config_path }}"
+        group: "{{ sb_capture_group }}"
+        content: "{{ sb_capture_secrets.rclone_config }}"
+  no_log: true
+
+- name: Install the protected sb-capture runtime configuration
+  ansible.builtin.include_role:
+    name: runtime_secrets
+  vars:
+    runtime_secret_files: "{{ sb_capture_runtime_secret_files }}"
+  no_log: true
+
+- name: Install the hardened sb-capture systemd units
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "/etc/systemd/system/{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - src: sb-capture.service.j2
+      dest: sb-capture.service
+    - src: sb-capture-drain.service.j2
+      dest: sb-capture-drain.service
+    - src: sb-capture-drain.timer.j2
+      dest: sb-capture-drain.timer
+  register: sb_capture_systemd_units
+
+- name: Enable and converge sb-capture
+  ansible.builtin.systemd_service:
+    name: sb-capture.service
+    enabled: true
+    daemon_reload: true
+    state: >-
+      {{ 'restarted'
+         if (runtime_secret_install_results.changed
+             or sb_capture_systemd_units.changed
+             or sb_capture_binary_install.changed | default(false))
+         else 'started' }}
+
+- name: Enable the sb-capture archive drain timer
+  ansible.builtin.systemd_service:
+    name: sb-capture-drain.timer
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Wait for sb-capture on loopback
+  ansible.builtin.uri:
+    url: "http://{{ sb_capture_host }}:{{ sb_capture_port }}/health"
+    method: GET
+    status_code: 200
+    return_content: true
+  register: sb_capture_loopback_health
+  retries: 15
+  delay: 2
+  until:
+    - sb_capture_loopback_health.status == 200
+    - "'spool_depth' in sb_capture_loopback_health.content"
+  when: not ansible_check_mode
+
+- name: Read active TCP listeners for sb-capture verification
+  ansible.builtin.command:
+    argv:
+      - ss
+      - -H
+      - -lntp
+  register: sb_capture_active_listeners
+  check_mode: false
+  changed_when: false
+
+- name: Require a loopback-only sb-capture listener
+  ansible.builtin.assert:
+    that:
+      - >-
+        sb_capture_active_listeners.stdout
+        is regex('(?m)^LISTEN .*127\\.0\\.0\\.1:' ~ sb_capture_port ~ '\\s')
+      - >-
+        sb_capture_active_listeners.stdout
+        is not regex('(?m)^LISTEN .*0\\.0\\.0\\.0:' ~ sb_capture_port ~ '\\s')
+      - >-
+        sb_capture_active_listeners.stdout
+        is not regex('(?m)^LISTEN .*\\[::\\]:' ~ sb_capture_port ~ '\\s')
+    fail_msg: sb-capture has an unsafe listener.
+    quiet: true
+
+- name: Confirm the media and archive tools the pipeline shells out to
+  ansible.builtin.command:
+    argv: "{{ item }}"
+  loop:
+    # ffmpeg spells it with one dash and exits non-zero on two.
+    - [ffmpeg, "-version"]
+    - [rclone, version]
+  register: sb_capture_tooling
+  check_mode: false
+  changed_when: false
+
+- name: Read the configured rclone remotes
+  ansible.builtin.command:
+    argv:
+      - rclone
+      - listremotes
+  environment:
+    RCLONE_CONFIG: "{{ sb_capture_rclone_config_path }}"
+  become_user: "{{ sb_capture_user }}"
+  register: sb_capture_rclone_remotes
+  check_mode: false
+  changed_when: false
+
+- name: Require the sb-capture Drive remote to be usable by the service account
+  ansible.builtin.assert:
+    that:
+      - >-
+        sb_capture_rclone_remotes.stdout_lines
+        | map('trim') | select('equalto', sb_capture_rclone_remote.split(':')[0] ~ ':')
+        | list | length == 1
+    fail_msg: >-
+      The rclone remote {{ sb_capture_rclone_remote.split(':')[0] }} is missing
+      from the deployed configuration.
+    quiet: true
+
+- name: Inspect the sb-capture Caddy route before convergence
+  ansible.builtin.stat:
+    path: "{{ caddy_sites_directory }}/80-sb-capture.caddy"
+  register: sb_capture_caddy_route_before_apply
+
+- name: Install the authenticated sb-capture Caddy route
+  ansible.builtin.template:
+    src: 80-sb-capture.caddy.j2
+    dest: "{{ caddy_sites_directory }}/80-sb-capture.caddy"
+    owner: root
+    group: caddy
+    mode: "0640"
+  register: sb_capture_caddy_route
+  diff: false
+  no_log: true
+
+- name: Require canonical formatting for the sb-capture Caddy route
+  ansible.builtin.command:
+    argv:
+      - caddy
+      - fmt
+      - --diff
+      - "{{ caddy_sites_directory }}/80-sb-capture.caddy"
+  become_user: caddy
+  register: sb_capture_caddy_format
+  check_mode: false
+  changed_when: false
+  failed_when: >-
+    sb_capture_caddy_format.rc != 0 or
+    sb_capture_caddy_format.stdout is regex('(?m)^[+-] ')
+  when:
+    - not ansible_check_mode or sb_capture_caddy_route_before_apply.stat.exists
+  no_log: true
+
+- name: Validate Caddy after adding the sb-capture route
+  ansible.builtin.command:
+    argv:
+      - caddy
+      - validate
+      - --config
+      - /etc/caddy/Caddyfile
+      - --adapter
+      - caddyfile
+  become_user: caddy
+  environment:
+    HOME: /var/lib/caddy
+    XDG_CONFIG_HOME: /var/lib/caddy/.config
+    XDG_DATA_HOME: /var/lib/caddy/.local/share
+  check_mode: false
+  changed_when: false
+  when:
+    - not ansible_check_mode or sb_capture_caddy_route_before_apply.stat.exists
+  no_log: true
+
+- name: Read Caddy's active configuration for sb-capture
+  ansible.builtin.command:
+    argv:
+      - curl
+      - --silent
+      - --show-error
+      - --fail
+      - http://127.0.0.1:2019/config/
+  register: sb_capture_active_caddy_config
+  check_mode: false
+  changed_when: false
+  when: not ansible_check_mode
+  no_log: true
+
+- name: Gracefully activate the sb-capture Caddy route
+  ansible.builtin.systemd_service:
+    name: caddy.service
+    state: reloaded
+  when:
+    - not ansible_check_mode
+    - >-
+      sb_capture_caddy_route.changed or
+      sb_capture_domain not in sb_capture_active_caddy_config.stdout
+
+- name: Check that unauthenticated public sb-capture access is refused
+  ansible.builtin.command:
+    argv:
+      - curl
+      - --silent
+      - --show-error
+      - --output
+      - /dev/null
+      - --write-out
+      - "%{http_code}"
+      - --connect-timeout
+      - "5"
+      - --max-time
+      - "20"
+      - --retry
+      - "12"
+      - --retry-delay
+      - "5"
+      - --retry-all-errors
+      - --noproxy
+      - "*"
+      - --resolve
+      - "{{ sb_capture_domain }}:443:127.0.0.1"
+      - "https://{{ sb_capture_domain }}/health"
+  register: sb_capture_public_unauthenticated
+  check_mode: false
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Check that an invalid sb-capture bearer token is refused
+  ansible.builtin.command:
+    argv:
+      - curl
+      - --silent
+      - --show-error
+      - --output
+      - /dev/null
+      - --write-out
+      - "%{http_code}"
+      - --connect-timeout
+      - "5"
+      - --max-time
+      - "20"
+      - --noproxy
+      - "*"
+      - --header
+      - "Authorization: Bearer invalid"
+      - --resolve
+      - "{{ sb_capture_domain }}:443:127.0.0.1"
+      - "https://{{ sb_capture_domain }}/health"
+  register: sb_capture_public_bad_token
+  check_mode: false
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Check that the sb-capture bearer token reaches the service
+  ansible.builtin.command:
+    argv:
+      - curl
+      - --silent
+      - --show-error
+      - --output
+      - /dev/null
+      - --write-out
+      - "%{http_code}"
+      - --connect-timeout
+      - "5"
+      - --max-time
+      - "20"
+      - --noproxy
+      - "*"
+      - --header
+      - "Authorization: Bearer {{ sb_capture_secrets.api_token }}"
+      - --resolve
+      - "{{ sb_capture_domain }}:443:127.0.0.1"
+      - "https://{{ sb_capture_domain }}/health"
+  register: sb_capture_public_authenticated
+  check_mode: false
+  changed_when: false
+  when: not ansible_check_mode
+  no_log: true
+
+- name: Require the reviewed sb-capture public authentication behaviour
+  ansible.builtin.assert:
+    that:
+      - sb_capture_public_unauthenticated.stdout | trim == '404'
+      - sb_capture_public_bad_token.stdout | trim == '404'
+      - sb_capture_public_authenticated.stdout | trim == '200'
+    fail_msg: The public sb-capture route does not enforce bearer authentication.
+    quiet: true
+  when: not ansible_check_mode

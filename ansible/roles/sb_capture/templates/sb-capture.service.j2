@@ -1,0 +1,59 @@
+[Unit]
+Description=sb voice-capture transcription endpoint
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User={{ sb_capture_user }}
+Group={{ sb_capture_group }}
+WorkingDirectory={{ sb_capture_state_directory }}
+Environment=HOME={{ sb_capture_state_directory }}
+Environment=RCLONE_CONFIG={{ sb_capture_rclone_config_path }}
+# tmpfs scratch space, emptied by systemd when the service stops.
+RuntimeDirectory=sb-capture
+RuntimeDirectoryMode=0700
+ExecStart={{ sb_capture_binary_path }} serve {{ sb_capture_config_path }}
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+UMask=0077
+LimitNOFILE=4096
+TasksMax=128
+MemoryMax=512M
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sb-capture
+
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectHostname=true
+ProtectClock=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectProc=invisible
+ProcSubset=pid
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RemoveIPC=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# Unlike the loopback-only services on this host, this one must reach
+# api.elevenlabs.io and Google Drive, so egress cannot be denied outright.
+IPAddressDeny=
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadOnlyPaths={{ sb_capture_install_root }} {{ sb_capture_config_directory }}
+ReadWritePaths={{ sb_capture_state_directory }}
+
+[Install]
+WantedBy=multi-user.target
