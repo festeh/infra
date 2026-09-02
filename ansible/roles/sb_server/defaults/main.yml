@@ -1,0 +1,65 @@
+---
+# sb-server: the vault's single source of truth (every version of every file
+# plus the change log the devices follow) and the voice-capture pipeline that
+# appends transcripts to it. Grown out of the sb_capture role, which it
+# replaces; the capture route and its credentials carry over unchanged.
+
+sb_server_user: sb-server
+sb_server_group: sb-server
+sb_server_state_directory: /var/lib/sb-server
+# The vault itself: one SQLite file. Everything the devices hold is derived
+# from it and can be re-seeded from any of them; only history lives here alone.
+sb_server_db_path: "{{ sb_server_state_directory }}/vault.sqlite3"
+sb_server_spool_directory: "{{ sb_server_state_directory }}/spool"
+sb_server_config_directory: /etc/sb-server
+sb_server_config_path: "{{ sb_server_config_directory }}/config.toml"
+sb_server_rclone_config_path: "{{ sb_server_config_directory }}/rclone.conf"
+# rclone rewrites its config whenever it refreshes an access token, and does so
+# by creating a temporary file alongside it — which the protected, read-only
+# credential directory forbids. The service therefore works from a copy it owns
+# and reseeds from the canonical one, so refreshed tokens persist instead of
+# failing noisily on every upload.
+sb_server_rclone_working_config: "{{ sb_server_state_directory }}/rclone.conf"
+
+# Capture audio is trimmed and transcribed here and deleted immediately
+# afterwards. systemd's RuntimeDirectory is tmpfs, so a recording never
+# reaches a disk on the happy path.
+sb_server_work_directory: /run/sb-server
+
+sb_server_host: 127.0.0.1
+sb_server_port: 8093
+sb_server_domain: sb.dimalip.in
+
+# A changes request is held open for up to 90 s waiting for the log to move
+# (MAX_WAIT in sync/src/protocol.rs). The proxy has to outwait it.
+sb_server_long_poll_timeout: 150s
+
+sb_server_install_root: /opt/sb-server
+sb_server_binary_path: "{{ sb_server_install_root }}/bin/sb-server"
+# Statically linked release binary built on the controller with `just server`
+# in the sb checkout:
+#   cargo build --release --target x86_64-unknown-linux-musl -p sb-server
+sb_server_release_artifact_path: ""
+
+# Google Drive destination for the original, untrimmed recordings.
+sb_server_rclone_remote: "gdrive:sb-capture"
+
+# How often a Drive upload that failed is retried.
+sb_server_drain_interval: 15min
+
+sb_server_packages:
+  - ffmpeg
+  - rclone
+
+# The predecessor this role retires on first apply. Its spool is carried over
+# so no recording waiting for Drive is lost in the switch.
+sb_server_predecessor_state_directory: /var/lib/sb-capture
+sb_server_predecessor_install_root: /opt/sb-capture
+sb_server_predecessor_config_directory: /etc/sb-capture
+sb_server_predecessor_caddy_route: "{{ caddy_sites_directory }}/80-sb-capture.caddy"
+sb_server_predecessor_user: sb-capture
+sb_server_predecessor_group: sb-capture
+sb_server_predecessor_units:
+  - sb-capture-drain.timer
+  - sb-capture-drain.service
+  - sb-capture.service

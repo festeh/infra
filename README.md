@@ -1,18 +1,26 @@
 # Infrastructure
 
-Ansible manages the VPS. `just` provides the small, repeatable command surface.
+Ansible manages a public application server and a private Tailscale server.
+`just` provides the small, repeatable command surface.
 
 ## Repository layout
 
 ```text
 ansible/
-├── inventories/production/
-│   ├── hosts.yml
-│   └── group_vars/all/main.yml
+├── inventories/
+│   ├── public/
+│   │   ├── hosts.yml
+│   │   └── group_vars/all/
+│   └── private/
+│       ├── hosts.yml
+│       └── group_vars/all/main.yml
 ├── playbooks/
-│   ├── bootstrap-access.yml
-│   ├── harden-ssh.yml
-│   └── site.yml
+│   ├── shared/
+│   │   ├── base.yml
+│   │   ├── bootstrap-access.yml
+│   │   └── harden-ssh.yml
+│   ├── private/site.yml
+│   └── public/site.yml
 └── roles/
     ├── access/
     ├── base/
@@ -28,20 +36,24 @@ ansible/
     ├── postgresql/
     ├── runtime_secrets/
     ├── static_release/
+    ├── syncthing/
+    ├── tailscale/
     └── uv_release/
 docs/
 └── service-inventory.md
 ```
 
-Active service configuration belongs in roles included by `site.yml`.
+Public service configuration belongs in roles included by
+`playbooks/public/site.yml`. The private site playbook adds Tailscale to the
+shared access, hardening, and operating-system baseline.
 Obsolete standalone playbooks and global templates were deleted; Git history
 retains their previous implementation.
 
 [`docs/service-inventory.md`](docs/service-inventory.md) is the authoritative
-production restoration scope. Repositories, DNS records, backups, and old Git
+public restoration scope. Repositories, DNS records, backups, and old Git
 history do not make a service active unless it appears in that retained list.
 
-## Bootstrap a reinstalled VPS
+## Provision a server
 
 The bootstrap is deliberately split into two safety stages. The first connects
 once as root and provisions `dima`; the second must establish a separate
@@ -54,9 +66,9 @@ Prerequisites on the controller:
 - `sshpass` (used only for Ansible's interactive `--ask-pass` prompt)
 - `~/.ssh/id_ed25519.pub`, or `BOOTSTRAP_SSH_PUBLIC_KEY` pointing to another key
 
-1. The password shown by IONOS after reinstall is temporary. If it has been
-   exposed, change it from the IONOS console before using it.
-2. In the IONOS console, print the new server's ED25519 host-key fingerprint:
+1. The password shown by the hosting provider is temporary. If it has been
+   exposed, reset it in the provider console before using it.
+2. In the provider console, print the new server's ED25519 host-key fingerprint:
 
    ```bash
    ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub -E sha256
@@ -67,7 +79,8 @@ Prerequisites on the controller:
    permits Ansible to send the temporary root password:
 
    ```bash
-   just bootstrap SHA256:YOUR_VERIFIED_FINGERPRINT
+   just provision public SHA256:YOUR_VERIFIED_FINGERPRINT
+   # or: just provision private SHA256:YOUR_VERIFIED_FINGERPRINT
    ```
 
    Enter the temporary root password only at Ansible's prompt. It is never
@@ -76,7 +89,12 @@ Prerequisites on the controller:
 On success, SSH accepts the controller key for `dima`; root SSH, SSH password
 authentication, and the root password are disabled.
 
-## Apply the declared server state
+Provisioning installs key-based administration, hardens SSH, upgrades the
+operating system, enables unattended security updates, and enforces the
+scope-specific listener allowlist. It never loads the public application stack
+for a private server.
+
+## Apply the public server state
 
 After the one-time bootstrap, one command converges and verifies the server:
 
@@ -87,33 +105,74 @@ just apply
 Additional Ansible arguments can be passed through the same command, for
 example `just apply --check --diff`.
 
+## Apply the private server state
+
+The first private apply needs a one-off or otherwise restricted Tailscale auth
+key. Pass it only through the controller environment; Ansible uses a temporary
+root-only file during enrollment and removes it immediately:
+
+```bash
+printf 'Tailscale auth key: ' >&2
+IFS= read -r -s TAILSCALE_AUTH_KEY
+printf '\n' >&2
+export TAILSCALE_AUTH_KEY
+just apply-private
+unset TAILSCALE_AUTH_KEY
+```
+
+Later applies need no key because the node identity persists in Tailscale's
+state directory:
+
+```bash
+just apply-private
+```
+
+The role installs the latest package from Tailscale's signed stable repository,
+uses the MagicDNS name `private`, accepts tailnet DNS, declines subnet routes,
+and keeps Tailscale SSH disabled in favor of the existing hardened OpenSSH
+service over the tailnet. The daemon uses its reviewed default UDP/41641 peer
+transport; allow that port in the provider firewall for the best chance of
+direct connections. Tailscale can still relay traffic when a direct path is not
+available. Its HTTP PeerAPI uses dynamic TCP ports bound only to this node's
+private Tailscale IPv4 and IPv6 addresses; the listener audit permits those
+sockets without permitting the same ports on public or wildcard addresses.
+
 ## Production secrets
 
-Production secret variables are committed only as Ansible Vault ciphertext
-below `ansible/inventories/production/group_vars/all/`. Shared values live in
+Public service secret variables are committed only as Ansible Vault ciphertext
+below `ansible/inventories/public/group_vars/all/`. Shared values live in
 `vault.yml`; separately reviewable service files may use inline `!vault`
-values, as `coach.vault.yml` does. Ansible obtains the Vault password from
-`ANSIBLE_VAULT_PASSWORD` in `~/dotfiles/.env` through a checked-in password
-client; the env file must be owned by the current user and must not grant
-access to group or others.
+values, as `coach.vault.yml` and `syncthing.vault.yml` do. Ansible obtains the
+Vault password from `ANSIBLE_VAULT_PASSWORD` in `~/dotfiles/.env` through a
+checked-in password client; the env file must be owned by the current user and
+must not grant access to group or others.
 
-The password's recovery copy belongs in Bitwarden. Runtime application secrets
-are installed as root-owned files below `/etc/<service>/`, readable only by
-root and the corresponding service group. Routine application deployments
-replace code without receiving the Vault password or rewriting these files.
+The password's recovery copy belongs in Bitwarden. Runtime application secret
+files are normally installed as root-owned files below `/etc/<service>/`,
+readable only by root and the corresponding service group. Syncthing's API key
+and password hash instead live in its mode-`0600` generated state. Routine
+application deployments replace code without receiving the Vault password or
+rewriting these files.
 
 The current site playbook maintains SSH hardening, upgrades the base Ubuntu
 system, enables unattended security updates, configures persistent bounded
 logs and time synchronization, manages the deny-by-default Caddy edge and
 loopback-only PostgreSQL, CLIProxyAPI, Miniflux, Coach, and My Agents services,
-the static `dimalip.in` and Papujki sites, reboots when a package upgrade
-requires it, and rejects unexpected network listeners.
+the encrypted Syncthing vault peer, and the static `dimalip.in` and Papujki
+sites, reboots when a package upgrade requires it, and rejects unexpected
+network listeners.
 
 The IONOS firewall remains the external firewall. The listener audit is a
 separate host-level invariant: loopback sockets are accepted automatically;
-every other TCP or UDP listener must match the reviewed production allowlist
-by protocol, port, and process. Application roles will be added to `site.yml`
-only after their bind address and public Caddy exposure are declared.
+every other TCP or UDP listener must match the reviewed public allowlist
+by protocol, port, and process. Application roles will be added to
+`playbooks/public/site.yml` only after their bind address and public Caddy
+exposure are declared.
+
+Syncthing is the only non-edge application with a direct listener: reviewed
+IPv4 TCP/22000 for its mutually authenticated sync protocol. Its authenticated
+GUI remains on `127.0.0.1:8384`; there is no Caddy route, IPv6 sync listener,
+QUIC listener, discovery broadcast, NAT traversal, or public GUI socket.
 
 Caddy writes structured request activity to `/var/log/caddy/access.log` with
 query strings redacted. It rotates at midnight or 25 MiB, retains no more than
@@ -169,7 +228,7 @@ upstream endpoint rate-limits repeated requests with HTTP 429.
 ## dimalip.in
 
 `dimalip.in` is a static Vue site. Its build generates the visualization
-catalogue and packages only `dist/` plus a revision marker; production has no
+catalogue and packages only `dist/` plus a revision marker; the public host has no
 application process, database, runtime secret, or private listener for it.
 Caddy serves the active release from `/opt/dimalip.in/current/dist` and returns
 404 for the removed `/api/*` paths and unknown files.
@@ -186,3 +245,31 @@ address as `DEPLOY_KNOWN_HOSTS` and `DEPLOY_HOST` variables. Its only deployment
 secret is `DEPLOY_SSH_PRIVATE_KEY`; it receives neither sudo access nor the
 Ansible Vault password. A push to `main` builds, audits, uploads, activates, and
 verifies the checksum-addressed release.
+
+## Syncthing encrypted vault peer
+
+The `syncthing` role installs Syncthing 2 from the checksum-pinned official
+stable-v2 repository and runs it as the dedicated `syncthing` account. The
+rotated VPS device identity is
+`PZTBJU7-PPJFEKC-LZPAYF2-RUGIGLV-Q62MSSJ-2AH2NN5-4JTCTJX-EIEKKAJ`; trusted
+devices reach it at `tcp://85.215.131.140:22000`. The IONOS firewall remains
+authoritative for that port.
+
+The `vault` folder is `receiveencrypted` on the VPS with one-year staggered
+versioning. The folder-encryption password exists only on trusted peers and is
+never stored in the public inventory or sent to the VPS. Ansible enforces an
+empty server-side encryption-password field, the expected seeded file and
+directory minimums, zero needed items, the exact listener shape, rotated GUI
+and API credentials, and the systemd sandbox.
+
+The GUI has no public route. To inspect it, first create an SSH tunnel and then
+open `http://127.0.0.1:8384`:
+
+```bash
+ssh -N -L 8384:127.0.0.1:8384 ionos
+```
+
+The laptop has been re-paired and the encrypted VPS copy is complete. The phone
+must replace the retired VPS ID
+`Q4ZZEIX-7RLE7VC-5R6SSK3-72U45OV-EUA7AQZ-JKUYZ3P-I2SXE6G-TWLNHAN` with the
+rotated ID above and reuse the existing `vault` folder-encryption password.

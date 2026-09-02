@@ -1,6 +1,19 @@
 ---
+- name: Require the public inventory for the public service stack
+  hosts: shared_servers
+  gather_facts: false
+  tasks:
+    - name: Reject non-public hosts
+      ansible.builtin.assert:
+        that:
+          - server_scope == "public"
+        fail_msg: >-
+          The public site playbook can run only with the public inventory.
+  tags:
+    - always
+
 - name: Keep administrative access hardened
-  ansible.builtin.import_playbook: harden-ssh.yml
+  ansible.builtin.import_playbook: ../shared/harden-ssh.yml
   tags:
     - access
 
@@ -38,6 +51,9 @@
     - role: my_agents
       tags:
         - my_agents
+    - role: sb_server
+      tags:
+        - sb_server
     - role: runtime_secrets
       tags:
         - secrets

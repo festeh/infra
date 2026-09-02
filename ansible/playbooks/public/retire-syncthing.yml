@@ -1,0 +1,39 @@
+---
+# The cutover's last step on the VPS. Prerequisites, in order: sb-server is
+# deployed and every device has joined it (`just apply --tags sb_server`, then
+# the laptop seeds and the phone follows), the `syncthing` role has been
+# removed from site.yml, and the TCP/22000 entry has been removed from
+# `allowed_public_listeners`. Then:
+#
+#   cd ansible && ansible-playbook -i inventories/public/hosts.yml \
+#       playbooks/public/retire-syncthing.yml
+#
+# and delete the TCP/22000 rule in the IONOS panel by hand.
+- name: Require the public inventory
+  hosts: shared_servers
+  gather_facts: false
+  tasks:
+    - name: Reject non-public hosts
+      ansible.builtin.assert:
+        that:
+          - server_scope == "public"
+        fail_msg: This playbook can run only with the public inventory.
+
+- name: Retire Syncthing from the public server
+  hosts: web_server
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Refuse to retire Syncthing while site.yml still converges it
+      ansible.builtin.assert:
+        that:
+          - "'role: syncthing' not in lookup('ansible.builtin.file', playbook_dir ~ '/site.yml')"
+        fail_msg: >-
+          Remove the syncthing role from playbooks/public/site.yml first;
+          otherwise the next `just apply` reinstalls what this removes.
+        quiet: true
+
+    - name: Remove Syncthing
+      ansible.builtin.include_role:
+        name: syncthing
+        tasks_from: retire

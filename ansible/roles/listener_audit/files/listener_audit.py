@@ -84,10 +84,27 @@ def validate_rules(rules: Any) -> list[dict[str, Any]]:
             raise ValueError("each listener rule must be an object")
         if rule.get("protocol") not in {"tcp", "udp"}:
             raise ValueError(f"invalid listener protocol: {rule.get('protocol')}")
-        if not isinstance(rule.get("port"), int):
+        if "port" in rule and not isinstance(rule["port"], int):
             raise ValueError(f"listener rule port must be an integer: {rule}")
+        if "address" in rule:
+            try:
+                ipaddress.ip_address(rule["address"])
+            except (TypeError, ValueError) as error:
+                raise ValueError(f"listener rule address must be an IP address: {rule}") from error
+        if "address_cidr" in rule:
+            try:
+                ipaddress.ip_network(rule["address_cidr"], strict=True)
+            except (TypeError, ValueError) as error:
+                raise ValueError(f"invalid listener rule CIDR: {rule}") from error
         if "process" in rule and not isinstance(rule["process"], str):
             raise ValueError(f"listener rule process must be a string: {rule}")
+        if "port" not in rule and not (
+            isinstance(rule.get("address_cidr"), str)
+            and isinstance(rule.get("process"), str)
+        ):
+            raise ValueError(
+                f"a portless listener rule requires address_cidr and process: {rule}"
+            )
     return rules
 
 
@@ -97,10 +114,19 @@ def load_rules(path: Path) -> list[dict[str, Any]]:
 
 def is_allowed(listener: dict[str, Any], rules: list[dict[str, Any]]) -> bool:
     for rule in rules:
-        if rule["protocol"] != listener["protocol"] or rule["port"] != listener["port"]:
+        if rule["protocol"] != listener["protocol"]:
+            continue
+        if "port" in rule and rule["port"] != listener["port"]:
             continue
         if "address" in rule and rule["address"] != listener["address"]:
             continue
+        if "address_cidr" in rule:
+            try:
+                listener_address = ipaddress.ip_address(listener["address"])
+            except ValueError:
+                continue
+            if listener_address not in ipaddress.ip_network(rule["address_cidr"]):
+                continue
         if "process" in rule and rule["process"] not in listener["processes"]:
             continue
         return True

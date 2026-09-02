@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# One-time Google Drive consent for sb-capture.
+# One-time Google Drive consent for the capture pipeline in sb-server.
 #
 # The only manual step in the whole deployment: rclone opens a browser, you
 # approve, and the resulting credential is encrypted straight into the
-# production vault. The plaintext token exists only in a mode-0600 temporary
+# public-service vault. The plaintext token exists only in a mode-0600 temporary
 # file that is shredded on exit, and is never printed.
 #
 # The consent does not expire. rclone's OAuth client is a published app, so the
@@ -12,7 +12,7 @@
 set -euo pipefail
 
 remote_name=gdrive
-vault_file="inventories/production/group_vars/all/sb_capture.vault.yml"
+vault_file="inventories/public/group_vars/all/sb_capture.vault.yml"
 # drive.file limits rclone to files it created itself, which is all an
 # upload-only archive needs. Pass "drive" for full account access.
 scope="${1:-drive.file}"
@@ -61,7 +61,7 @@ if ! grep -q 'refresh_token' "$config"; then
 fi
 
 encrypted="$(
-  ansible-vault encrypt_string --encrypt-vault-id production \
+  ansible-vault encrypt_string --encrypt-vault-id public \
     --stdin-name rclone_config < "$config"
 )"
 
@@ -82,9 +82,9 @@ PY
 
 cat <<'NEXT'
 
-Next, once capture.dimalip.in resolves:
+Next, once sb.dimalip.in resolves:
 
-  just apply --tags sb_capture \
-    -e sb_capture_release_artifact_path=$HOME/projects/sb/target/x86_64-unknown-linux-musl/release/sb-capture-server
+  just apply --tags sb_server \
+    -e sb_server_release_artifact_path=$HOME/projects/sb/target/x86_64-unknown-linux-musl/release/sb-server
 
 NEXT

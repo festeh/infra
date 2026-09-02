@@ -1,0 +1,518 @@
+---
+# The credentials are the ones sb_capture used: the same bearer token the
+# devices already present, the same ElevenLabs key, the same Drive remote. The
+# mapping keeps its old variable name in the vault file so the switch needs no
+# re-encryption; a future rotation can move it under vault_sb_server_secrets.
+- name: Load the encrypted sb-server secret mapping
+  ansible.builtin.set_fact:
+    sb_server_secrets: >-
+      {{ vault_sb_server_secrets | default(vault_sb_capture_secrets) | default({}) }}
+  no_log: true
+
+# Installed ahead of the credential gate below. The Drive credential is
+# produced by running rclone on this host, so the tools cannot wait on the
+# secret that rclone itself generates.
+- name: Install the sb-server media and archive tools
+  ansible.builtin.apt:
+    name: "{{ sb_server_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Report sb-server as awaiting its Google Drive credential
+  ansible.builtin.debug:
+    msg: >-
+      sb-server is declared but not deployed:
+      rclone_config is absent from its secret mapping. rclone is installed
+      here, so generate the credential on this host over an SSH tunnel
+      (ssh -L 53682:localhost:53682 ionos) and add it to the vault.
+  when: sb_server_secrets.get('rclone_config', '') | length == 0
+
+- name: Skip sb-server until its Google Drive credential exists
+  ansible.builtin.meta: end_role
+  when: sb_server_secrets.get('rclone_config', '') | length == 0
+
+- name: Require a complete and safe sb-server declaration
+  ansible.builtin.assert:
+    that:
+      - sb_server_host == '127.0.0.1'
+      - sb_server_port | int == 8093
+      - sb_server_domain is match('^[a-z0-9.-]+$')
+      - sb_server_install_root is match('^/opt/[A-Za-z0-9._-]+$')
+      - sb_server_state_directory is match('^/var/lib/[A-Za-z0-9._-]+$')
+      - sb_server_work_directory is match('^/run/[A-Za-z0-9._-]+$')
+      - sb_server_db_path is match('^/var/lib/[A-Za-z0-9._/-]+\.sqlite3$')
+      - sb_server_long_poll_timeout is match('^[0-9]+s$')
+      - sb_server_rclone_remote is match('^[A-Za-z0-9_-]+:[A-Za-z0-9._/-]*$')
+      - sb_server_secrets is mapping
+      - sb_server_secrets.get('api_token', '') is match('^[0-9a-f]{64}$')
+      - sb_server_secrets.get('elevenlabs_api_key', '') | length >= 20
+      - sb_server_secrets.get('rclone_config', '') is search('\[gdrive\]')
+      - sb_server_secrets.api_token != sb_server_secrets.elevenlabs_api_key
+    fail_msg: The encrypted sb-server credentials or service declaration are invalid.
+    quiet: true
+  no_log: true
+
+# Caddy cannot obtain a certificate for a name that does not resolve, and the
+# resulting failure surfaces far from its cause. Fail here instead.
+#
+# Asked of the zone's own nameserver rather than the controller's resolver: a
+# stub cache holding a stale answer would otherwise fail this check long after
+# the record was corrected, and certificate issuance does not depend on caches
+# either — Let's Encrypt resolves authoritatively.
+- name: Resolve the sb-server public hostname authoritatively
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      nameserver="$(dig +short NS "{{ sb_server_domain.split('.')[1:] | join('.') }}" | head -1)"
+      test -n "$nameserver"
+      dig +short "@${nameserver}" "{{ sb_server_domain }}" A
+  delegate_to: localhost
+  become: false
+  register: sb_server_domain_resolution
+  check_mode: false
+  changed_when: false
+  failed_when: false
+
+- name: Require the sb-server hostname to point at this server
+  ansible.builtin.assert:
+    that:
+      - sb_server_domain_resolution.rc == 0
+      # ansible_host is the SSH alias, not an address, so the server's own
+      # public address is what the A record has to match.
+      - ansible_facts['default_ipv4']['address'] in sb_server_domain_resolution.stdout
+    fail_msg: >-
+      {{ sb_server_domain }} does not resolve to
+      {{ ansible_facts['default_ipv4']['address'] }} at its authoritative
+      nameserver. Point the A record at this server before applying, otherwise
+      Caddy will fail certificate issuance for the route below. Any AAAA record
+      must go too: clients preferring IPv6 would bypass the A record entirely.
+    quiet: true
+
+- name: Check whether the sb-server service account already exists
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ sb_server_user }}"
+    fail_key: false
+  check_mode: false
+  changed_when: false
+
+- name: Record whether sb-server existed before this run
+  ansible.builtin.set_fact:
+    sb_server_user_existed_before_apply: >-
+      {{ ansible_facts.getent_passwd.get(sb_server_user) is not none }}
+
+- name: Create the sb-server system group
+  ansible.builtin.group:
+    name: "{{ sb_server_group }}"
+    system: true
+
+- name: Create the unprivileged sb-server service account
+  ansible.builtin.user:
+    name: "{{ sb_server_user }}"
+    group: "{{ sb_server_group }}"
+    home: "{{ sb_server_state_directory }}"
+    shell: /usr/sbin/nologin
+    system: true
+    create_home: false
+    password_lock: true
+
+- name: Defer a first-time sb-server installation during check mode
+  ansible.builtin.meta: end_role
+  when:
+    - ansible_check_mode
+    - not sb_server_user_existed_before_apply
+
+- name: Create the protected sb-server state directory
+  ansible.builtin.file:
+    path: "{{ sb_server_state_directory }}"
+    state: directory
+    owner: "{{ sb_server_user }}"
+    group: "{{ sb_server_group }}"
+    mode: "0700"
+
+# The one place a recording persists, and only while Google Drive is refusing
+# uploads. The drain timer empties it.
+- name: Create the sb-server archive spool
+  ansible.builtin.file:
+    path: "{{ sb_server_spool_directory }}"
+    state: directory
+    owner: "{{ sb_server_user }}"
+    group: "{{ sb_server_group }}"
+    mode: "0700"
+
+- name: Retire the sb-capture service this one replaces
+  ansible.builtin.include_tasks: retire_predecessor.yml
+
+- name: Create the sb-server program directory
+  ansible.builtin.file:
+    path: "{{ sb_server_install_root }}/bin"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+# Deliberately not the shared binary_release role: that exists so a CI workflow
+# can push releases without Vault access, and sb has no such workflow. Adding a
+# forced-command SSH identity here would be reachable attack surface serving no
+# deployment path that exists.
+- name: Install the sb-server release binary
+  ansible.builtin.copy:
+    src: "{{ sb_server_release_artifact_path }}"
+    dest: "{{ sb_server_binary_path }}"
+    owner: root
+    group: root
+    mode: "0755"
+  when: sb_server_release_artifact_path | length > 0
+  register: sb_server_binary_install
+
+- name: Confirm the sb-server binary is present
+  ansible.builtin.stat:
+    path: "{{ sb_server_binary_path }}"
+  register: sb_server_binary_state
+
+- name: Require an installed sb-server binary
+  ansible.builtin.assert:
+    that:
+      - sb_server_binary_state.stat.exists
+      - sb_server_binary_state.stat.executable
+    fail_msg: >-
+      No sb-server binary is installed. Supply
+      sb_server_release_artifact_path for the first apply.
+    quiet: true
+
+- name: Render the protected sb-server runtime configuration
+  ansible.builtin.set_fact:
+    sb_server_runtime_secret_files:
+      - path: "{{ sb_server_config_path }}"
+        group: "{{ sb_server_group }}"
+        content: >-
+          {{ lookup('ansible.builtin.template', role_path ~ '/templates/config.toml.j2') }}
+      - path: "{{ sb_server_rclone_config_path }}"
+        group: "{{ sb_server_group }}"
+        content: "{{ sb_server_secrets.rclone_config }}"
+  no_log: true
+
+- name: Install the protected sb-server runtime configuration
+  ansible.builtin.include_role:
+    name: runtime_secrets
+  vars:
+    runtime_secret_files: "{{ sb_server_runtime_secret_files }}"
+  no_log: true
+
+# The unit reseeds this on start, but only when it is absent, so a rotated
+# credential would otherwise never reach the copy the service actually reads.
+- name: Discard the rclone working copy when the credential changes
+  ansible.builtin.file:
+    path: "{{ sb_server_rclone_working_config }}"
+    state: absent
+  when: runtime_secret_install_results.changed
+
+- name: Install the hardened sb-server systemd units
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "/etc/systemd/system/{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - src: sb-server.service.j2
+      dest: sb-server.service
+    - src: sb-server-drain.service.j2
+      dest: sb-server-drain.service
+    - src: sb-server-drain.timer.j2
+      dest: sb-server-drain.timer
+  register: sb_server_systemd_units
+
+- name: Enable and converge sb-server
+  ansible.builtin.systemd_service:
+    name: sb-server.service
+    enabled: true
+    daemon_reload: true
+    state: >-
+      {{ 'restarted'
+         if (runtime_secret_install_results.changed
+             or sb_server_systemd_units.changed
+             or sb_server_binary_install.changed | default(false))
+         else 'started' }}
+
+- name: Enable the sb-server archive drain timer
+  ansible.builtin.systemd_service:
+    name: sb-server-drain.timer
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Wait for sb-server on loopback
+  ansible.builtin.uri:
+    url: "http://{{ sb_server_host }}:{{ sb_server_port }}/health"
+    method: GET
+    status_code: 200
+    return_content: true
+  register: sb_server_loopback_health
+  retries: 15
+  delay: 2
+  until:
+    - sb_server_loopback_health.status == 200
+    - "'seq' in sb_server_loopback_health.content"
+  when: not ansible_check_mode
+
+- name: Read active TCP listeners for sb-server verification
+  ansible.builtin.command:
+    argv:
+      - ss
+      - -H
+      - -lntp
+  register: sb_server_active_listeners
+  check_mode: false
+  changed_when: false
+
+- name: Require a loopback-only sb-server listener
+  ansible.builtin.assert:
+    that:
+      - >-
+        sb_server_active_listeners.stdout
+        is regex('(?m)^LISTEN .*127\\.0\\.0\\.1:' ~ sb_server_port ~ '\\s')
+      - >-
+        sb_server_active_listeners.stdout
+        is not regex('(?m)^LISTEN .*0\\.0\\.0\\.0:' ~ sb_server_port ~ '\\s')
+      - >-
+        sb_server_active_listeners.stdout
+        is not regex('(?m)^LISTEN .*\\[::\\]:' ~ sb_server_port ~ '\\s')
+    fail_msg: sb-server has an unsafe listener.
+    quiet: true
+
+- name: Confirm the media and archive tools the capture pipeline shells out to
+  ansible.builtin.command:
+    argv: "{{ item }}"
+  loop:
+    # ffmpeg spells it with one dash and exits non-zero on two.
+    - [ffmpeg, "-version"]
+    - [rclone, version]
+  register: sb_server_tooling
+  check_mode: false
+  changed_when: false
+
+- name: Read the configured rclone remotes
+  ansible.builtin.command:
+    argv:
+      - rclone
+      - listremotes
+  environment:
+    RCLONE_CONFIG: "{{ sb_server_rclone_config_path }}"
+  become_user: "{{ sb_server_user }}"
+  register: sb_server_rclone_remotes
+  check_mode: false
+  changed_when: false
+
+- name: Require the sb-server Drive remote to be usable by the service account
+  ansible.builtin.assert:
+    that:
+      - >-
+        sb_server_rclone_remotes.stdout_lines
+        | map('trim') | select('equalto', sb_server_rclone_remote.split(':')[0] ~ ':')
+        | list | length == 1
+    fail_msg: >-
+      The rclone remote {{ sb_server_rclone_remote.split(':')[0] }} is missing
+      from the deployed configuration.
+    quiet: true
+
+- name: Inspect the sb-server Caddy route before convergence
+  ansible.builtin.stat:
+    path: "{{ caddy_sites_directory }}/90-sb-server.caddy"
+  register: sb_server_caddy_route_before_apply
+
+- name: Install the authenticated sb-server Caddy route
+  ansible.builtin.template:
+    src: 90-sb-server.caddy.j2
+    dest: "{{ caddy_sites_directory }}/90-sb-server.caddy"
+    owner: root
+    group: caddy
+    mode: "0640"
+  register: sb_server_caddy_route
+  diff: false
+  no_log: true
+
+- name: Require canonical formatting for the sb-server Caddy route
+  ansible.builtin.command:
+    argv:
+      - caddy
+      - fmt
+      - --diff
+      - "{{ caddy_sites_directory }}/90-sb-server.caddy"
+  become_user: caddy
+  register: sb_server_caddy_format
+  check_mode: false
+  changed_when: false
+  failed_when: >-
+    sb_server_caddy_format.rc != 0 or
+    sb_server_caddy_format.stdout is regex('(?m)^[+-] ')
+  when:
+    - not ansible_check_mode or sb_server_caddy_route_before_apply.stat.exists
+  no_log: true
+
+- name: Validate Caddy after adding the sb-server route
+  ansible.builtin.command:
+    argv:
+      - caddy
+      - validate
+      - --config
+      - /etc/caddy/Caddyfile
+      - --adapter
+      - caddyfile
+  become_user: caddy
+  environment:
+    HOME: /var/lib/caddy
+    XDG_CONFIG_HOME: /var/lib/caddy/.config
+    XDG_DATA_HOME: /var/lib/caddy/.local/share
+  check_mode: false
+  changed_when: false
+  when:
+    - not ansible_check_mode or sb_server_caddy_route_before_apply.stat.exists
+  no_log: true
+
+- name: Read Caddy's active configuration for sb-server
+  ansible.builtin.command:
+    argv:
+      - curl
+      - --silent
+      - --show-error
+      - --fail
+      - http://127.0.0.1:2019/config/
+  register: sb_server_active_caddy_config
+  check_mode: false
+  changed_when: false
+  when: not ansible_check_mode
+  no_log: true
+
+- name: Gracefully activate the sb-server Caddy route
+  ansible.builtin.systemd_service:
+    name: caddy.service
+    state: reloaded
+  when:
+    - not ansible_check_mode
+    - >-
+      sb_server_caddy_route.changed or
+      sb_server_domain not in sb_server_active_caddy_config.stdout
+
+- name: Check that the public sb-server health route answers without a token
+  ansible.builtin.command:
+    argv:
+      - curl
+      - --silent
+      - --show-error
+      - --output
+      - /dev/null
+      - --write-out
+      - "%{http_code}"
+      - --connect-timeout
+      - "5"
+      - --max-time
+      - "20"
+      - --retry
+      - "12"
+      - --retry-delay
+      - "5"
+      - --retry-all-errors
+      - --noproxy
+      - "*"
+      - --resolve
+      - "{{ sb_server_domain }}:443:127.0.0.1"
+      - "https://{{ sb_server_domain }}/health"
+  register: sb_server_public_health
+  check_mode: false
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Check that unauthenticated public sync access is refused
+  ansible.builtin.command:
+    argv:
+      - curl
+      - --silent
+      - --show-error
+      - --output
+      - /dev/null
+      - --write-out
+      - "%{http_code}"
+      - --connect-timeout
+      - "5"
+      - --max-time
+      - "20"
+      - --noproxy
+      - "*"
+      - --resolve
+      - "{{ sb_server_domain }}:443:127.0.0.1"
+      - "https://{{ sb_server_domain }}/sync/changes?since=0"
+  register: sb_server_public_unauthenticated
+  check_mode: false
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Check that an invalid sb-server bearer token is refused
+  ansible.builtin.command:
+    argv:
+      - curl
+      - --silent
+      - --show-error
+      - --output
+      - /dev/null
+      - --write-out
+      - "%{http_code}"
+      - --connect-timeout
+      - "5"
+      - --max-time
+      - "20"
+      - --noproxy
+      - "*"
+      - --header
+      - "Authorization: Bearer invalid"
+      - --resolve
+      - "{{ sb_server_domain }}:443:127.0.0.1"
+      - "https://{{ sb_server_domain }}/sync/changes?since=0"
+  register: sb_server_public_bad_token
+  check_mode: false
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Check that the sb-server bearer token reaches the sync routes
+  ansible.builtin.command:
+    argv:
+      - curl
+      - --silent
+      - --show-error
+      - --output
+      - /dev/null
+      - --write-out
+      - "%{http_code}"
+      - --connect-timeout
+      - "5"
+      - --max-time
+      - "20"
+      - --noproxy
+      - "*"
+      - --header
+      - "Authorization: Bearer {{ sb_server_secrets.api_token }}"
+      - --resolve
+      - "{{ sb_server_domain }}:443:127.0.0.1"
+      - "https://{{ sb_server_domain }}/sync/changes?since=0"
+  register: sb_server_public_authenticated
+  check_mode: false
+  changed_when: false
+  when: not ansible_check_mode
+  no_log: true
+
+- name: Require the reviewed public sb-server behaviour
+  ansible.builtin.assert:
+    that:
+      - sb_server_public_health.stdout == '200'
+      - sb_server_public_unauthenticated.stdout == '404'
+      - sb_server_public_bad_token.stdout == '404'
+      - sb_server_public_authenticated.stdout == '200'
+    fail_msg: >-
+      The public sb-server route does not behave as reviewed: health
+      {{ sb_server_public_health.stdout }}, no token
+      {{ sb_server_public_unauthenticated.stdout }}, bad token
+      {{ sb_server_public_bad_token.stdout }}, valid token
+      {{ sb_server_public_authenticated.stdout }}.
+    quiet: true
+  when: not ansible_check_mode

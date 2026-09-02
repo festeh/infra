@@ -1,0 +1,27 @@
+---
+base_timezone: Europe/Berlin
+
+tailscale_hostname: private
+
+# The private host exposes administrative SSH and Tailscale's encrypted peer
+# transport. The image's DHCP client also owns its expected non-loopback UDP
+# listener.
+allowed_public_listeners:
+  - protocol: tcp
+    port: 22
+    process: sshd
+  - protocol: udp
+    port: 41641
+    process: tailscaled
+  # Tailscale's HTTP PeerAPI chooses dynamic TCP ports, but binds them only to
+  # this node's private tailnet addresses. Never permit those ports on a public
+  # or wildcard address.
+  - protocol: tcp
+    address_cidr: 100.64.0.0/10
+    process: tailscaled
+  - protocol: tcp
+    address_cidr: fd7a:115c:a1e0::/48
+    process: tailscaled
+  - protocol: udp
+    port: 68
+    process: systemd-network

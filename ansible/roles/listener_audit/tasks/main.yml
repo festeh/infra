@@ -3,14 +3,19 @@
   ansible.builtin.assert:
     that:
       - item.protocol in ["tcp", "udp"]
-      - item.port is number
-      - item.port | int > 0
-      - item.port | int < 65536
+      - item.port is not defined or item.port is number
+      - item.port is not defined or item.port | int > 0
+      - item.port is not defined or item.port | int < 65536
+      - >-
+        item.port is defined or
+        (item.address_cidr is defined and item.process is defined)
       - item.process is not defined or item.process | length > 0
     fail_msg: "Invalid public-listener rule: {{ item }}"
   loop: "{{ allowed_public_listeners }}"
   loop_control:
-    label: "{{ item.protocol | default('?') }}:{{ item.port | default('?') }}"
+    label: >-
+      {{ item.protocol | default('?') }}:
+      {{ item.port | default(item.address_cidr | default('?')) }}
 
 - name: Create the listener-audit program directory
   ansible.builtin.file:

@@ -1,0 +1,79 @@
+---
+# Removes Syncthing from the VPS once every device syncs through sb-server.
+# Run through playbooks/public/retire-syncthing.yml, never from site.yml: the
+# role's main task list still converges Syncthing while it is listed there,
+# so the order is "remove the role from site.yml, then run this".
+#
+# Off-host, in the same session: delete the IONOS panel rule for TCP/22000
+# (Ansible does not manage that firewall), drop the VPS device from the laptop
+# and the phone, uninstall Syncthing-Fork, and remove the `allowed_public_
+# listeners` entry plus the `syncthing_*` variables from the public inventory.
+# The encrypted vault copy and its version history go with the state
+# directory; the laptop holds the plaintext and sb-server holds history now.
+
+- name: Stop and disable Syncthing
+  ansible.builtin.systemd_service:
+    name: syncthing.service
+    state: stopped
+    enabled: false
+  failed_when: false
+
+- name: Remove the Syncthing unit
+  ansible.builtin.file:
+    path: /etc/systemd/system/syncthing.service
+    state: absent
+  register: syncthing_retire_unit
+
+- name: Reload systemd after removing the Syncthing unit
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: syncthing_retire_unit.changed
+
+- name: Remove the Syncthing package
+  ansible.builtin.apt:
+    name: syncthing
+    state: absent
+    purge: true
+
+- name: Remove the Syncthing APT repository, pin, and signing key
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/apt/sources.list.d/syncthing.sources
+    - /etc/apt/preferences.d/syncthing
+    - "{{ syncthing_release_key_path }}"
+
+- name: Remove the Syncthing state, identity, and encrypted vault copy
+  ansible.builtin.file:
+    path: "{{ syncthing_state_directory }}"
+    state: absent
+
+- name: Remove the Syncthing service account
+  ansible.builtin.user:
+    name: "{{ syncthing_user }}"
+    state: absent
+
+- name: Remove the Syncthing group
+  ansible.builtin.group:
+    name: "{{ syncthing_group }}"
+    state: absent
+
+- name: Read active TCP listeners after retiring Syncthing
+  ansible.builtin.command:
+    argv:
+      - ss
+      - -H
+      - -lntp
+  register: syncthing_retire_listeners
+  check_mode: false
+  changed_when: false
+
+- name: Require the Syncthing transport port to be closed
+  ansible.builtin.assert:
+    that:
+      - >-
+        syncthing_retire_listeners.stdout
+        is not regex('(?m):' ~ syncthing_sync_port ~ '\\s')
+    fail_msg: Something still listens on the retired Syncthing port {{ syncthing_sync_port }}.
+    quiet: true

@@ -1,0 +1,52 @@
+[Unit]
+Description=Syncthing encrypted vault peer
+Documentation=https://docs.syncthing.net/
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User={{ syncthing_user }}
+Group={{ syncthing_group }}
+WorkingDirectory={{ syncthing_state_directory }}
+Environment=HOME={{ syncthing_state_directory }}
+ExecStart={{ syncthing_binary_path }} serve --home={{ syncthing_state_directory }} --no-browser --no-restart --no-upgrade --no-port-probing
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+UMask=0077
+LimitNOFILE=8192
+TasksMax=256
+MemoryMax=1G
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=syncthing
+
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectHostname=true
+ProtectClock=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectProc=invisible
+ProcSubset=pid
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RemoveIPC=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths={{ syncthing_state_directory }}
+
+[Install]
+WantedBy=multi-user.target

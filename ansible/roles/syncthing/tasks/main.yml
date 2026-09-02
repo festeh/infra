@@ -1,0 +1,785 @@
+---
+- name: Load the encrypted Syncthing secret mapping
+  ansible.builtin.set_fact:
+    syncthing_secrets: "{{ vault_syncthing_secrets | default({}) }}"
+  no_log: true
+
+- name: Require a complete and safe Syncthing declaration
+  ansible.builtin.assert:
+    that:
+      - syncthing_user == 'syncthing'
+      - syncthing_state_directory == '/var/lib/syncthing'
+      - syncthing_gui_host == '127.0.0.1'
+      - syncthing_gui_port | int == 8384
+      - syncthing_sync_listen_address == 'tcp4://0.0.0.0:22000'
+      - syncthing_sync_port | int == 22000
+      - syncthing_folder_id == 'vault'
+      - syncthing_folder_type == 'receiveencrypted'
+      - syncthing_peer_devices | length > 0
+      - >-
+        syncthing_peer_devices | map(attribute='id') | list | unique | length
+        == syncthing_peer_devices | length
+      - >-
+        syncthing_peer_devices | map(attribute='id') | list
+        | intersect(syncthing_retired_device_ids) | length == 0
+      - syncthing_secrets is mapping
+      - syncthing_secrets.get('gui_password', '') is match('^[0-9a-f]{64}$')
+      - >-
+        syncthing_secrets.get('gui_password_hash', '')
+        is match('^\$2[aby]\$1[024]\$[./A-Za-z0-9]{53}$')
+      - syncthing_secrets.get('api_key', '') is match('^[0-9a-f]{64}$')
+      - syncthing_secrets.gui_password != syncthing_secrets.api_key
+    fail_msg: The Syncthing credentials or service declaration are invalid.
+    quiet: true
+  no_log: true
+
+- name: Validate declared Syncthing peer identities
+  ansible.builtin.assert:
+    that:
+      - item.name is match('^[A-Za-z0-9._-]+$')
+      - item.id is match('^([A-Z2-7]{7}-){7}[A-Z2-7]{7}$')
+    fail_msg: "Invalid Syncthing peer declaration: {{ item.name | default('?') }}"
+    quiet: true
+  loop: "{{ syncthing_peer_devices }}"
+  loop_control:
+    label: "{{ item.name | default('?') }}"
+
+- name: Inspect the Syncthing configuration before convergence
+  ansible.builtin.stat:
+    path: "{{ syncthing_config_path }}"
+  register: syncthing_config_before_apply
+
+- name: Create the Syncthing system group
+  ansible.builtin.group:
+    name: "{{ syncthing_group }}"
+    system: true
+
+- name: Create the unprivileged Syncthing account
+  ansible.builtin.user:
+    name: "{{ syncthing_user }}"
+    group: "{{ syncthing_group }}"
+    home: "{{ syncthing_state_directory }}"
+    shell: /usr/sbin/nologin
+    system: true
+    create_home: false
+    password_lock: true
+
+- name: Defer a first-time Syncthing installation during check mode
+  ansible.builtin.meta: end_role
+  when:
+    - ansible_check_mode
+    - not syncthing_config_before_apply.stat.exists
+
+- name: Create the protected Syncthing directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ syncthing_user }}"
+    group: "{{ syncthing_group }}"
+    mode: "0700"
+  loop:
+    - "{{ syncthing_state_directory }}"
+    - "{{ syncthing_vault_directory }}"
+
+- name: Create the APT keyring directory
+  ansible.builtin.file:
+    path: "{{ syncthing_release_key_path | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the checksum-pinned Syncthing release key
+  ansible.builtin.get_url:
+    url: "{{ syncthing_release_key_url }}"
+    dest: "{{ syncthing_release_key_path }}"
+    checksum: "{{ syncthing_release_key_checksum }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Configure the official Syncthing stable-v2 repository
+  ansible.builtin.deb822_repository:
+    name: syncthing
+    types:
+      - deb
+    uris:
+      - "{{ syncthing_apt_repository_uri }}"
+    suites:
+      - "{{ syncthing_apt_repository_suite }}"
+    components:
+      - "{{ syncthing_apt_repository_component }}"
+    signed_by: "{{ syncthing_release_key_path }}"
+    state: present
+  register: syncthing_apt_repository_result
+
+- name: Prefer the signed Syncthing repository for its package
+  ansible.builtin.copy:
+    content: |
+      Package: syncthing
+      Pin: origin apt.syncthing.net
+      Pin-Priority: 990
+    dest: /etc/apt/preferences.d/syncthing
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install or upgrade Syncthing from the stable-v2 channel
+  ansible.builtin.apt:
+    name: syncthing
+    state: latest
+    update_cache: true
+    cache_valid_time: 3600
+  register: syncthing_package_result
+
+- name: Generate the rotated Syncthing identity and initial configuration
+  ansible.builtin.command:
+    argv:
+      - "{{ syncthing_binary_path }}"
+      - generate
+      - "--home={{ syncthing_state_directory }}"
+      - "--gui-user={{ syncthing_gui_username }}"
+      - --gui-password=-
+      - --no-port-probing
+    creates: "{{ syncthing_config_path }}"
+    stdin: "{{ syncthing_secrets.gui_password }}"
+    stdin_add_newline: true
+  become_user: "{{ syncthing_user }}"
+  environment:
+    HOME: "{{ syncthing_state_directory }}"
+  register: syncthing_config_generated
+  no_log: true
+
+- name: Install the rotated Syncthing GUI credentials
+  ansible.builtin.replace:
+    path: "{{ syncthing_config_path }}"
+    regexp: "{{ item.regexp }}"
+    replace: "{{ item.replace }}"
+  loop:
+    - regexp: '(<user>)[^<]*(</user>)'
+      replace: '\g<1>{{ syncthing_gui_username }}\g<2>'
+    - regexp: '(<password>)[^<]*(</password>)'
+      replace: '\g<1>{{ syncthing_secrets.gui_password_hash }}\g<2>'
+    - regexp: '(<apikey>)[^<]*(</apikey>)'
+      replace: '\g<1>{{ syncthing_secrets.api_key }}\g<2>'
+  register: syncthing_credential_config
+  diff: false
+  no_log: true
+
+- name: Restrict Syncthing discovery and transport before first start
+  ansible.builtin.replace:
+    path: "{{ syncthing_config_path }}"
+    regexp: "{{ item.regexp }}"
+    replace: "{{ item.replace }}"
+  loop:
+    - regexp: '(<listenAddress>)[^<]*(</listenAddress>)'
+      replace: '\g<1>{{ syncthing_sync_listen_address }}\g<2>'
+    - regexp: '(<globalAnnounceEnabled>)[^<]*(</globalAnnounceEnabled>)'
+      replace: '\g<1>false\g<2>'
+    - regexp: '(<localAnnounceEnabled>)[^<]*(</localAnnounceEnabled>)'
+      replace: '\g<1>false\g<2>'
+    - regexp: '(<relaysEnabled>)[^<]*(</relaysEnabled>)'
+      replace: '\g<1>false\g<2>'
+    - regexp: '(<startBrowser>)[^<]*(</startBrowser>)'
+      replace: '\g<1>false\g<2>'
+    - regexp: '(<natEnabled>)[^<]*(</natEnabled>)'
+      replace: '\g<1>false\g<2>'
+    - regexp: '(<urAccepted>)[^<]*(</urAccepted>)'
+      replace: '\g<1>-1\g<2>'
+    - regexp: '(<autoUpgradeIntervalH>)[^<]*(</autoUpgradeIntervalH>)'
+      replace: '\g<1>0\g<2>'
+    - regexp: '(<crashReportingEnabled>)[^<]*(</crashReportingEnabled>)'
+      replace: '\g<1>false\g<2>'
+    - regexp: '(<announceLANAddresses>)[^<]*(</announceLANAddresses>)'
+      replace: '\g<1>false\g<2>'
+  register: syncthing_network_config
+
+- name: Protect the Syncthing identity and configuration files
+  ansible.builtin.file:
+    path: "{{ syncthing_state_directory }}/{{ item }}"
+    state: file
+    owner: "{{ syncthing_user }}"
+    group: "{{ syncthing_group }}"
+    mode: "0600"
+  loop:
+    - cert.pem
+    - key.pem
+    - config.xml
+
+- name: Read the active Syncthing device identity
+  ansible.builtin.command:
+    argv:
+      - "{{ syncthing_binary_path }}"
+      - device-id
+      - "--home={{ syncthing_state_directory }}"
+  become_user: "{{ syncthing_user }}"
+  environment:
+    HOME: "{{ syncthing_state_directory }}"
+  register: syncthing_device_identity
+  check_mode: false
+  changed_when: false
+
+- name: Require a newly rotated Syncthing identity
+  ansible.builtin.assert:
+    that:
+      - >-
+        syncthing_device_identity.stdout | trim
+        is match('^([A-Z2-7]{7}-){7}[A-Z2-7]{7}$')
+      - syncthing_device_identity.stdout | trim not in syncthing_retired_device_ids
+    fail_msg: Syncthing is using an invalid or retired VPS device identity.
+    quiet: true
+
+- name: Install the hardened Syncthing systemd unit
+  ansible.builtin.template:
+    src: syncthing.service.j2
+    dest: /etc/systemd/system/syncthing.service
+    owner: root
+    group: root
+    mode: "0644"
+  register: syncthing_systemd_unit
+
+- name: Enable and start Syncthing
+  ansible.builtin.systemd_service:
+    name: syncthing.service
+    enabled: true
+    daemon_reload: true
+    state: started
+
+- name: Restart Syncthing after managed package or configuration changes
+  ansible.builtin.systemd_service:
+    name: syncthing.service
+    state: restarted
+  when:
+    - not ansible_check_mode
+    - >-
+      syncthing_package_result.changed or
+      syncthing_config_generated.changed or
+      syncthing_credential_config.changed or
+      syncthing_network_config.changed or
+      syncthing_systemd_unit.changed
+
+- name: Wait for the authenticated Syncthing API on loopback
+  ansible.builtin.uri:
+    url: "http://{{ syncthing_gui_host }}:{{ syncthing_gui_port }}/rest/system/status"
+    method: GET
+    headers:
+      X-API-Key: "{{ syncthing_secrets.api_key }}"
+    status_code: 200
+    return_content: true
+  register: syncthing_api_status
+  retries: 20
+  delay: 2
+  until:
+    - syncthing_api_status.status == 200
+    - syncthing_api_status.json.myID | default('') == syncthing_device_identity.stdout | trim
+  when: not ansible_check_mode
+  no_log: true
+
+- name: Read configured Syncthing devices
+  ansible.builtin.command:
+    argv:
+      - "{{ syncthing_binary_path }}"
+      - "--home={{ syncthing_state_directory }}"
+      - cli
+      - config
+      - devices
+      - list
+  become_user: "{{ syncthing_user }}"
+  environment:
+    HOME: "{{ syncthing_state_directory }}"
+  register: syncthing_configured_devices
+  check_mode: false
+  changed_when: false
+
+- name: Add declared trusted peers to the encrypted VPS
+  ansible.builtin.command:
+    argv:
+      - "{{ syncthing_binary_path }}"
+      - "--home={{ syncthing_state_directory }}"
+      - cli
+      - config
+      - devices
+      - add
+      - "--device-id={{ item.id }}"
+      - "--name={{ item.name }}"
+  become_user: "{{ syncthing_user }}"
+  environment:
+    HOME: "{{ syncthing_state_directory }}"
+  loop: "{{ syncthing_peer_devices }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - not ansible_check_mode
+    - item.id not in syncthing_configured_devices.stdout_lines
+
+- name: Read configured Syncthing folders
+  ansible.builtin.command:
+    argv:
+      - "{{ syncthing_binary_path }}"
+      - "--home={{ syncthing_state_directory }}"
+      - cli
+      - config
+      - folders
+      - list
+  become_user: "{{ syncthing_user }}"
+  environment:
+    HOME: "{{ syncthing_state_directory }}"
+  register: syncthing_configured_folders
+  check_mode: false
+  changed_when: false
+
+- name: Create the receive-encrypted vault folder
+  ansible.builtin.command:
+    argv:
+      - "{{ syncthing_binary_path }}"
+      - "--home={{ syncthing_state_directory }}"
+      - cli
+      - config
+      - folders
+      - add
+      - "--id={{ syncthing_folder_id }}"
+      - "--label={{ syncthing_folder_label }}"
+      - "--path={{ syncthing_vault_directory }}"
+      - "--type={{ syncthing_folder_type }}"
+  become_user: "{{ syncthing_user }}"
+  environment:
+    HOME: "{{ syncthing_state_directory }}"
+  when:
+    - not ansible_check_mode
+    - syncthing_folder_id not in syncthing_configured_folders.stdout_lines
+
+- name: Read the managed Syncthing folder properties
+  ansible.builtin.command:
+    argv:
+      - "{{ syncthing_binary_path }}"
+      - "--home={{ syncthing_state_directory }}"
+      - cli
+      - config
+      - folders
+      - "{{ syncthing_folder_id }}"
+      - "{{ item.property }}"
+      - get
+  become_user: "{{ syncthing_user }}"
+  environment:
+    HOME: "{{ syncthing_state_directory }}"
+  loop:
+    - property: label
+      value: "{{ syncthing_folder_label }}"
+    - property: path
+      value: "{{ syncthing_vault_directory }}"
+    - property: type
+      value: "{{ syncthing_folder_type }}"
+  loop_control:
+    label: "{{ item.property }}"
+  register: syncthing_folder_properties
+  check_mode: false
+  changed_when: false
+  when:
+    - not ansible_check_mode or syncthing_folder_id in syncthing_configured_folders.stdout_lines
+
+- name: Converge the managed Syncthing folder properties
+  ansible.builtin.command:
+    argv:
+      - "{{ syncthing_binary_path }}"
+      - "--home={{ syncthing_state_directory }}"
+      - cli
+      - config
+      - folders
+      - "{{ syncthing_folder_id }}"
+      - "{{ item.item.property }}"
+      - set
+      - "{{ item.item.value }}"
+  become_user: "{{ syncthing_user }}"
+  environment:
+    HOME: "{{ syncthing_state_directory }}"
+  loop: "{{ syncthing_folder_properties.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.property }}"
+  when:
+    - not ansible_check_mode
+    - item.stdout | trim != item.item.value | string
+
+- name: Read the vault's shared device set
+  ansible.builtin.command:
+    argv:
+      - "{{ syncthing_binary_path }}"
+      - "--home={{ syncthing_state_directory }}"
+      - cli
+      - config
+      - folders
+      - "{{ syncthing_folder_id }}"
+      - devices
+      - list
+  become_user: "{{ syncthing_user }}"
+  environment:
+    HOME: "{{ syncthing_state_directory }}"
+  register: syncthing_folder_devices
+  check_mode: false
+  changed_when: false
+  when:
+    - not ansible_check_mode or syncthing_folder_id in syncthing_configured_folders.stdout_lines
+
+- name: Share the encrypted vault with each declared peer
+  ansible.builtin.command:
+    argv:
+      - "{{ syncthing_binary_path }}"
+      - "--home={{ syncthing_state_directory }}"
+      - cli
+      - config
+      - folders
+      - "{{ syncthing_folder_id }}"
+      - devices
+      - add
+      - "--device-id={{ item.id }}"
+  become_user: "{{ syncthing_user }}"
+  environment:
+    HOME: "{{ syncthing_state_directory }}"
+  loop: "{{ syncthing_peer_devices }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - not ansible_check_mode
+    - item.id not in (syncthing_folder_devices.stdout_lines | default([]))
+
+- name: Read the vault versioning type
+  ansible.builtin.command:
+    argv:
+      - "{{ syncthing_binary_path }}"
+      - "--home={{ syncthing_state_directory }}"
+      - cli
+      - config
+      - folders
+      - "{{ syncthing_folder_id }}"
+      - versioning
+      - type
+      - get
+  become_user: "{{ syncthing_user }}"
+  environment:
+    HOME: "{{ syncthing_state_directory }}"
+  register: syncthing_versioning_type_current
+  check_mode: false
+  changed_when: false
+  when:
+    - not ansible_check_mode or syncthing_folder_id in syncthing_configured_folders.stdout_lines
+
+- name: Enable staggered encrypted-file versioning
+  ansible.builtin.command:
+    argv:
+      - "{{ syncthing_binary_path }}"
+      - "--home={{ syncthing_state_directory }}"
+      - cli
+      - config
+      - folders
+      - "{{ syncthing_folder_id }}"
+      - versioning
+      - type
+      - set
+      - "{{ syncthing_versioning_type }}"
+  become_user: "{{ syncthing_user }}"
+  environment:
+    HOME: "{{ syncthing_state_directory }}"
+  when:
+    - not ansible_check_mode
+    - syncthing_versioning_type_current.stdout | trim != syncthing_versioning_type
+
+- name: Read the staggered version-retention limit
+  ansible.builtin.command:
+    argv:
+      - "{{ syncthing_binary_path }}"
+      - "--home={{ syncthing_state_directory }}"
+      - cli
+      - config
+      - folders
+      - "{{ syncthing_folder_id }}"
+      - versioning
+      - params
+      - get
+      - maxAge
+  become_user: "{{ syncthing_user }}"
+  environment:
+    HOME: "{{ syncthing_state_directory }}"
+  register: syncthing_versioning_max_age_current
+  check_mode: false
+  changed_when: false
+  failed_when: false
+  when:
+    - not ansible_check_mode or syncthing_folder_id in syncthing_configured_folders.stdout_lines
+
+- name: Converge the staggered version-retention limit
+  ansible.builtin.command:
+    argv:
+      - "{{ syncthing_binary_path }}"
+      - "--home={{ syncthing_state_directory }}"
+      - cli
+      - config
+      - folders
+      - "{{ syncthing_folder_id }}"
+      - versioning
+      - params
+      - set
+      - maxAge
+      - "{{ syncthing_versioning_max_age_seconds }}"
+  become_user: "{{ syncthing_user }}"
+  environment:
+    HOME: "{{ syncthing_state_directory }}"
+  when:
+    - not ansible_check_mode
+    - >-
+      syncthing_versioning_max_age_current.rc != 0 or
+      syncthing_versioning_max_age_current.stdout | trim
+      != syncthing_versioning_max_age_seconds | string
+
+- name: Read the Syncthing GUI address
+  ansible.builtin.command:
+    argv:
+      - "{{ syncthing_binary_path }}"
+      - "--home={{ syncthing_state_directory }}"
+      - cli
+      - config
+      - gui
+      - raw-address
+      - get
+  become_user: "{{ syncthing_user }}"
+  environment:
+    HOME: "{{ syncthing_state_directory }}"
+  register: syncthing_gui_address_current
+  check_mode: false
+  changed_when: false
+
+- name: Converge the loopback-only Syncthing GUI address
+  ansible.builtin.command:
+    argv:
+      - "{{ syncthing_binary_path }}"
+      - "--home={{ syncthing_state_directory }}"
+      - cli
+      - config
+      - gui
+      - raw-address
+      - set
+      - "{{ syncthing_gui_host }}:{{ syncthing_gui_port }}"
+  become_user: "{{ syncthing_user }}"
+  environment:
+    HOME: "{{ syncthing_state_directory }}"
+  when:
+    - not ansible_check_mode
+    - >-
+      syncthing_gui_address_current.stdout | trim
+      != syncthing_gui_host ~ ':' ~ syncthing_gui_port
+
+- name: Check whether Syncthing requires a configuration restart
+  ansible.builtin.uri:
+    url: >-
+      http://{{ syncthing_gui_host }}:{{ syncthing_gui_port
+      }}/rest/config/restart-required
+    method: GET
+    headers:
+      X-API-Key: "{{ syncthing_secrets.api_key }}"
+    status_code: 200
+    return_content: true
+  register: syncthing_restart_required
+  when: not ansible_check_mode
+  no_log: true
+
+- name: Restart Syncthing when the live configuration requires it
+  ansible.builtin.systemd_service:
+    name: syncthing.service
+    state: restarted
+  when:
+    - not ansible_check_mode
+    - syncthing_restart_required.json.requiresRestart | default(false)
+
+- name: Wait for Syncthing after live configuration convergence
+  ansible.builtin.uri:
+    url: "http://{{ syncthing_gui_host }}:{{ syncthing_gui_port }}/rest/system/status"
+    method: GET
+    headers:
+      X-API-Key: "{{ syncthing_secrets.api_key }}"
+    status_code: 200
+    return_content: true
+  register: syncthing_converged_status
+  retries: 20
+  delay: 2
+  until:
+    - syncthing_converged_status.status == 200
+    - >-
+      syncthing_converged_status.json.myID | default('')
+      == syncthing_device_identity.stdout | trim
+  when: not ansible_check_mode
+  no_log: true
+
+- name: Verify that the Syncthing API rejects unauthenticated access
+  ansible.builtin.uri:
+    url: "http://{{ syncthing_gui_host }}:{{ syncthing_gui_port }}/rest/system/status"
+    method: GET
+    status_code:
+      - 401
+      - 403
+  register: syncthing_unauthenticated_api
+  check_mode: false
+  changed_when: false
+
+- name: Verify the rotated Syncthing GUI password
+  ansible.builtin.uri:
+    url: >-
+      http://{{ syncthing_gui_host }}:{{ syncthing_gui_port
+      }}/rest/noauth/auth/password
+    method: POST
+    body_format: json
+    body:
+      username: "{{ syncthing_gui_username }}"
+      password: "{{ syncthing_secrets.gui_password }}"
+      stayLoggedIn: false
+    status_code: 204
+  check_mode: false
+  changed_when: false
+  no_log: true
+
+- name: Read the converged encrypted-folder declaration
+  ansible.builtin.command:
+    argv:
+      - "{{ syncthing_binary_path }}"
+      - "--home={{ syncthing_state_directory }}"
+      - cli
+      - config
+      - folders
+      - "{{ syncthing_folder_id }}"
+      - dump-json
+  become_user: "{{ syncthing_user }}"
+  environment:
+    HOME: "{{ syncthing_state_directory }}"
+  register: syncthing_folder_declaration
+  check_mode: false
+  changed_when: false
+  no_log: true
+
+- name: Require an encrypted-only vault declaration on the VPS
+  ansible.builtin.assert:
+    that:
+      - (syncthing_folder_declaration.stdout | from_json).type == 'receiveencrypted'
+      - >-
+        (syncthing_folder_declaration.stdout | from_json).path
+        == syncthing_vault_directory
+      - >-
+        (syncthing_folder_declaration.stdout | from_json).versioning.type
+        == syncthing_versioning_type
+      - >-
+        (syncthing_folder_declaration.stdout | from_json).versioning.params.maxAge
+        == syncthing_versioning_max_age_seconds | string
+      - >-
+        (syncthing_folder_declaration.stdout | from_json).devices
+        | selectattr('encryptionPassword', 'ne', '') | list | length == 0
+      - >-
+        (syncthing_folder_declaration.stdout | from_json).devices
+        | map(attribute='deviceID') | list | sort
+        == ((syncthing_peer_devices | map(attribute='id') | list)
+            + [syncthing_device_identity.stdout | trim]) | sort
+    fail_msg: The VPS Syncthing folder is not a closed receive-encrypted declaration.
+    quiet: true
+  no_log: true
+
+- name: Wait for the expected encrypted vault state
+  ansible.builtin.uri:
+    url: >-
+      http://{{ syncthing_gui_host }}:{{ syncthing_gui_port
+      }}/rest/db/status?folder={{ syncthing_folder_id }}
+    method: GET
+    headers:
+      X-API-Key: "{{ syncthing_secrets.api_key }}"
+    status_code: 200
+    return_content: true
+  register: syncthing_vault_status
+  retries: 30
+  delay: 2
+  until:
+    - syncthing_vault_status.json.state | default('') == 'idle'
+    - syncthing_vault_status.json.error | default('') | length == 0
+    - >-
+      syncthing_vault_status.json.localFiles | default(0) | int
+      >= syncthing_expected_min_files | int
+    - >-
+      syncthing_vault_status.json.localDirectories | default(0) | int
+      >= syncthing_expected_min_directories | int
+    - syncthing_vault_status.json.needFiles | default(0) | int == 0
+    - syncthing_vault_status.json.needDirectories | default(0) | int == 0
+  when: not ansible_check_mode
+  no_log: true
+
+- name: Read active IPv4 TCP listeners for Syncthing verification
+  ansible.builtin.command:
+    argv:
+      - ss
+      - -H
+      - -4
+      - -lntp
+  register: syncthing_ipv4_tcp_listeners
+  check_mode: false
+  changed_when: false
+
+- name: Read active IPv6 TCP listeners for Syncthing verification
+  ansible.builtin.command:
+    argv:
+      - ss
+      - -H
+      - -6
+      - -lntp
+  register: syncthing_ipv6_tcp_listeners
+  check_mode: false
+  changed_when: false
+
+- name: Read active Syncthing UDP listeners
+  ansible.builtin.command:
+    argv:
+      - ss
+      - -H
+      - -lnup
+  register: syncthing_udp_listeners
+  check_mode: false
+  changed_when: false
+
+- name: Require the reviewed Syncthing listener shape
+  ansible.builtin.assert:
+    that:
+      - >-
+        syncthing_ipv4_tcp_listeners.stdout
+        is regex('(?m)^LISTEN .*127\.0\.0\.1:' ~ syncthing_gui_port ~ '\s')
+      - >-
+        syncthing_ipv4_tcp_listeners.stdout
+        is regex('(?m)^LISTEN .*(0\.0\.0\.0|\*):' ~ syncthing_sync_port ~ '\s')
+      - >-
+        syncthing_ipv4_tcp_listeners.stdout
+        is not regex('(?m)^LISTEN .*0\.0\.0\.0:' ~ syncthing_gui_port ~ '\s')
+      - >-
+        syncthing_ipv4_tcp_listeners.stdout
+        is not regex('(?m)^LISTEN .*\*:' ~ syncthing_gui_port ~ '\s')
+      - >-
+        syncthing_ipv6_tcp_listeners.stdout
+        is not regex('(?m):' ~ syncthing_gui_port ~ '\s')
+      - >-
+        syncthing_ipv6_tcp_listeners.stdout
+        is not regex('(?m):' ~ syncthing_sync_port ~ '\s')
+      - >-
+        syncthing_udp_listeners.stdout
+        is not regex('(?m):' ~ syncthing_sync_port ~ '\s')
+      - syncthing_udp_listeners.stdout is not regex('(?m):21027\s')
+    fail_msg: >-
+      Unexpected Syncthing listeners.
+      IPv4={{ syncthing_ipv4_tcp_listeners.stdout_lines }}
+      IPv6={{ syncthing_ipv6_tcp_listeners.stdout_lines }}
+      UDP={{ syncthing_udp_listeners.stdout_lines }}
+    quiet: true
+
+- name: Read the installed Syncthing version
+  ansible.builtin.command:
+    argv:
+      - "{{ syncthing_binary_path }}"
+      - --version
+  register: syncthing_installed_version
+  check_mode: false
+  changed_when: false
+
+- name: Require the signed stable-v2 Syncthing package
+  ansible.builtin.assert:
+    that:
+      - syncthing_installed_version.stdout is match('^syncthing v2\.')
+    fail_msg: "Unexpected Syncthing build: {{ syncthing_installed_version.stdout }}"
+    quiet: true

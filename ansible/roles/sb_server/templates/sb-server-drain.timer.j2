@@ -3,9 +3,9 @@ Description=Periodic retry of spooled sb voice-capture uploads
 
 [Timer]
 OnBootSec=5min
-OnUnitActiveSec={{ sb_capture_drain_interval }}
+OnUnitActiveSec={{ sb_server_drain_interval }}
 Persistent=true
-Unit=sb-capture-drain.service
+Unit=sb-server-drain.service
 
 [Install]
 WantedBy=timers.target

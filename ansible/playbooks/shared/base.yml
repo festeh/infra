@@ -1,0 +1,21 @@
+---
+- name: Converge the shared operating-system baseline
+  hosts: shared_servers
+  become: true
+  gather_facts: true
+  serial: 1
+
+  roles:
+    - role: base
+      tags:
+        - base
+
+  post_tasks:
+    - name: Enforce the scope-specific public-listener allowlist
+      ansible.builtin.include_role:
+        name: listener_audit
+        apply:
+          tags:
+            - always
+      tags:
+        - always

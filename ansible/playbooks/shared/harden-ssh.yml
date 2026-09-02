@@ -1,6 +1,6 @@
 ---
 - name: Verify key access and disable root/password SSH
-  hosts: web_server
+  hosts: shared_servers
   gather_facts: false
   become: false
   roles:

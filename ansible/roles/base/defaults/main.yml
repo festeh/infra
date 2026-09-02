@@ -13,6 +13,7 @@ base_packages:
   - jq
   - needrestart
   - python3-apt
+  - python3-debian
   - rsync
   - tzdata
   - unattended-upgrades

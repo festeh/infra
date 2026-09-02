@@ -1,0 +1,76 @@
+---
+# sb-server replaces sb-capture-server: same credentials, same capture route,
+# plus the vault. The old service is stopped and removed on the first apply,
+# and any recording it was still holding for Google Drive moves to the new
+# spool so the switch loses nothing.
+
+- name: Check whether the retired sb-capture service is installed
+  ansible.builtin.stat:
+    path: /etc/systemd/system/sb-capture.service
+  register: sb_server_predecessor_unit
+
+- name: Retire sb-capture
+  when: sb_server_predecessor_unit.stat.exists
+  block:
+    - name: Stop and disable the sb-capture units
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        state: stopped
+        enabled: false
+      loop: "{{ sb_server_predecessor_units }}"
+      failed_when: false
+
+    - name: Look for recordings the retired service still owed Google Drive
+      ansible.builtin.find:
+        paths: "{{ sb_server_predecessor_state_directory }}/spool"
+        recurse: true
+        file_type: file
+      register: sb_server_predecessor_spool
+
+    - name: Carry the retired spool over to the new one
+      ansible.builtin.copy:
+        src: "{{ item.path }}"
+        dest: "{{ sb_server_spool_directory }}/{{ item.path | relpath(sb_server_predecessor_state_directory ~ '/spool') }}"
+        remote_src: true
+        owner: "{{ sb_server_user }}"
+        group: "{{ sb_server_group }}"
+        mode: "0600"
+      loop: "{{ sb_server_predecessor_spool.files }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
+
+    - name: Remove the sb-capture units, program, configuration, and state
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/systemd/system/sb-capture.service
+        - /etc/systemd/system/sb-capture-drain.service
+        - /etc/systemd/system/sb-capture-drain.timer
+        - "{{ sb_server_predecessor_install_root }}"
+        - "{{ sb_server_predecessor_config_directory }}"
+        - "{{ sb_server_predecessor_state_directory }}"
+        - "{{ sb_server_predecessor_caddy_route }}"
+      register: sb_server_predecessor_removed
+
+    - name: Reload systemd after removing the sb-capture units
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
+    - name: Remove the sb-capture service account
+      ansible.builtin.user:
+        name: "{{ sb_server_predecessor_user }}"
+        state: absent
+
+    - name: Remove the sb-capture group
+      ansible.builtin.group:
+        name: "{{ sb_server_predecessor_group }}"
+        state: absent
+
+    # The route file is gone; Caddy must stop serving the old hostname. The
+    # main task list reloads Caddy again once the new route is in place.
+    - name: Reload Caddy without the retired sb-capture route
+      ansible.builtin.systemd_service:
+        name: caddy.service
+        state: reloaded
+      when: not ansible_check_mode

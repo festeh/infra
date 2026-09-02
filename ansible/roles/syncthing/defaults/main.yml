@@ -1,0 +1,36 @@
+---
+syncthing_user: syncthing
+syncthing_group: syncthing
+syncthing_state_directory: /var/lib/syncthing
+syncthing_config_path: "{{ syncthing_state_directory }}/config.xml"
+syncthing_vault_directory: "{{ syncthing_state_directory }}/vault"
+
+syncthing_binary_path: /usr/bin/syncthing
+syncthing_release_key_url: https://syncthing.net/release-key.gpg
+syncthing_release_key_path: /etc/apt/keyrings/syncthing-archive-keyring.gpg
+syncthing_release_key_checksum: >-
+  sha256:c38853d2ccb890ae428e1fbf05d8c8fe0ba6f560bd050e161fb4e5324cdb4a9b
+syncthing_apt_repository_uri: https://apt.syncthing.net/
+syncthing_apt_repository_suite: syncthing
+syncthing_apt_repository_component: stable-v2
+
+syncthing_gui_host: 127.0.0.1
+syncthing_gui_port: 8384
+syncthing_gui_username: dima
+syncthing_sync_listen_address: tcp4://0.0.0.0:22000
+syncthing_sync_port: 22000
+
+syncthing_folder_id: vault
+syncthing_folder_label: Vault
+syncthing_folder_type: receiveencrypted
+syncthing_versioning_type: staggered
+syncthing_versioning_max_age_seconds: 31536000
+
+syncthing_peer_devices: []
+syncthing_retired_device_ids: []
+
+# A first deployment is intentionally allowed to start empty so the trusted
+# laptop can pair with the newly rotated VPS identity. Production inventory
+# raises this after the encrypted seed has completed.
+syncthing_expected_min_files: 0
+syncthing_expected_min_directories: 0

@@ -1,33 +1,33 @@
 [Unit]
-Description=sb voice-capture transcription endpoint
+Description=sb vault sync server and voice-capture endpoint
 Wants=network-online.target
 After=network-online.target
 
 [Service]
 Type=simple
-User={{ sb_capture_user }}
-Group={{ sb_capture_group }}
-WorkingDirectory={{ sb_capture_state_directory }}
-Environment=HOME={{ sb_capture_state_directory }}
-Environment=RCLONE_CONFIG={{ sb_capture_rclone_working_config }}
+User={{ sb_server_user }}
+Group={{ sb_server_group }}
+WorkingDirectory={{ sb_server_state_directory }}
+Environment=HOME={{ sb_server_state_directory }}
+Environment=RCLONE_CONFIG={{ sb_server_rclone_working_config }}
 # rclone must be able to rewrite its own config when it refreshes a token,
 # so it works from a copy in the state directory. Seeded on demand; the role
 # deletes the copy whenever the canonical credential changes.
-ExecStartPre=/bin/sh -c 'test -f {{ sb_capture_rclone_working_config }} || install -m 0600 {{ sb_capture_rclone_config_path }} {{ sb_capture_rclone_working_config }}'
-# tmpfs scratch space, emptied by systemd when the service stops.
-RuntimeDirectory=sb-capture
+ExecStartPre=/bin/sh -c 'test -f {{ sb_server_rclone_working_config }} || install -m 0600 {{ sb_server_rclone_config_path }} {{ sb_server_rclone_working_config }}'
+# tmpfs scratch space for capture audio, emptied by systemd when the service stops.
+RuntimeDirectory=sb-server
 RuntimeDirectoryMode=0700
-ExecStart={{ sb_capture_binary_path }} serve {{ sb_capture_config_path }}
+ExecStart={{ sb_server_binary_path }} serve {{ sb_server_config_path }}
 Restart=on-failure
 RestartSec=5s
 TimeoutStopSec=30s
 UMask=0077
 LimitNOFILE=4096
 TasksMax=128
-MemoryMax=512M
+MemoryMax=768M
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=sb-capture
+SyslogIdentifier=sb-server
 
 NoNewPrivileges=true
 PrivateDevices=true
@@ -52,12 +52,12 @@ SystemCallArchitectures=native
 SystemCallFilter=@system-service
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 # Unlike the loopback-only services on this host, this one must reach
-# api.elevenlabs.io and Google Drive, so egress cannot be denied outright.
+# api.elevenlabs.io and Google Drive for captures, so egress cannot be denied.
 IPAddressDeny=
 CapabilityBoundingSet=
 AmbientCapabilities=
-ReadOnlyPaths={{ sb_capture_install_root }} {{ sb_capture_config_directory }}
-ReadWritePaths={{ sb_capture_state_directory }}
+ReadOnlyPaths={{ sb_server_install_root }} {{ sb_server_config_directory }}
+ReadWritePaths={{ sb_server_state_directory }}
 
 [Install]
 WantedBy=multi-user.target

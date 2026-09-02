@@ -1,0 +1,20 @@
+---
+tailscale_repository_key_url: >-
+  https://pkgs.tailscale.com/stable/ubuntu/{{ ansible_facts['distribution_release'] }}.noarmor.gpg
+tailscale_repository_key_path: /usr/share/keyrings/tailscale-archive-keyring.gpg
+tailscale_repository_key_checksum: >-
+  sha256:3e03dacf222698c60b8e2f990b809ca1b3e104de127767864284e6c228f1fb39
+tailscale_repository_key_fingerprint: 2596A99EAAB33821893C0A79458CA832957F5868
+tailscale_repository_url: https://pkgs.tailscale.com/stable/ubuntu
+tailscale_repository_file: /etc/apt/sources.list.d/tailscale.sources
+
+tailscale_hostname: "{{ inventory_hostname | replace('_', '-') }}"
+tailscale_port: 41641
+tailscale_accept_dns: true
+tailscale_accept_routes: false
+tailscale_ssh: false
+
+# This is needed only while enrolling a node with no existing Tailscale state.
+# Pass a one-off or otherwise appropriately restricted key through the controller
+# environment; the role never persists it after `tailscale up` returns.
+tailscale_auth_key: "{{ lookup('ansible.builtin.env', 'TAILSCALE_AUTH_KEY') }}"

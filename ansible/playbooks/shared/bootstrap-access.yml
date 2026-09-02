@@ -1,6 +1,6 @@
 ---
 - name: Provision the key-based administration account
-  hosts: web_server
+  hosts: shared_servers
   gather_facts: false
   become: false
   vars:

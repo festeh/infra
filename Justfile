@@ -1,28 +1,44 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
 ansible_dir := justfile_directory() + "/ansible"
-inventory := ansible_dir + "/inventories/production/hosts.yml"
-host_alias := "ionos"
+public_inventory := ansible_dir + "/inventories/public/hosts.yml"
+private_inventory := ansible_dir + "/inventories/private/hosts.yml"
 
 default:
     @just --list
 
-# Print the untrusted ED25519 fingerprint currently offered by the VPS.
-_host-fingerprint:
+# Print the untrusted ED25519 fingerprint currently offered by a server.
+_host-fingerprint scope:
     #!/usr/bin/env bash
-    resolved_host="$(ssh -G "{{ host_alias }}" 2>/dev/null | awk '$1 == "hostname" { print $2; exit }')"
-    port="$(ssh -G "{{ host_alias }}" 2>/dev/null | awk '$1 == "port" { print $2; exit }')"
+    set -euo pipefail
+
+    case "{{ scope }}" in
+      public) host_alias=ionos ;;
+      private) host_alias=private ;;
+      *) echo "Scope must be public or private" >&2; exit 2 ;;
+    esac
+
+    resolved_host="$(ssh -G "$host_alias" 2>/dev/null | awk '$1 == "hostname" { print $2; exit }')"
+    port="$(ssh -G "$host_alias" 2>/dev/null | awk '$1 == "port" { print $2; exit }')"
     key_file="$(mktemp)"
     trap 'rm -f "$key_file"' EXIT
     ssh-keyscan -T 10 -p "$port" -t ed25519 "$resolved_host" > "$key_file" 2>/dev/null
     ssh-keygen -lf "$key_file" -E sha256
 
-# Replace the stale pre-reinstall host key only when it matches the fingerprint
-# obtained independently from the IONOS console.
-_trust-host expected_fingerprint:
+# Trust a host key only when it matches a fingerprint obtained independently
+# from the corresponding provider console.
+_trust-host scope expected_fingerprint:
     #!/usr/bin/env bash
-    resolved_host="$(ssh -G "{{ host_alias }}" 2>/dev/null | awk '$1 == "hostname" { print $2; exit }')"
-    port="$(ssh -G "{{ host_alias }}" 2>/dev/null | awk '$1 == "port" { print $2; exit }')"
+    set -euo pipefail
+
+    case "{{ scope }}" in
+      public) host_alias=ionos ;;
+      private) host_alias=private ;;
+      *) echo "Scope must be public or private" >&2; exit 2 ;;
+    esac
+
+    resolved_host="$(ssh -G "$host_alias" 2>/dev/null | awk '$1 == "hostname" { print $2; exit }')"
+    port="$(ssh -G "$host_alias" 2>/dev/null | awk '$1 == "port" { print $2; exit }')"
     key_file="$(mktemp)"
     trap 'rm -f "$key_file"' EXIT
 
@@ -39,7 +55,7 @@ _trust-host expected_fingerprint:
     touch "$HOME/.ssh/known_hosts"
     chmod 600 "$HOME/.ssh/known_hosts"
 
-    ssh-keygen -R "{{ host_alias }}" >/dev/null 2>&1 || true
+    ssh-keygen -R "$host_alias" >/dev/null 2>&1 || true
     ssh-keygen -R "$resolved_host" >/dev/null 2>&1 || true
     ssh-keygen -R "[$resolved_host]:$port" >/dev/null 2>&1 || true
     key_line="$(awk '$2 == "ssh-ed25519" { print; exit }' "$key_file")"
@@ -51,18 +67,39 @@ _trust-host expected_fingerprint:
 
     echo "Trusted $resolved_host:$port with $actual_fingerprint"
 
-# Trust an independently verified host key, provision dima, and harden SSH.
-bootstrap expected_fingerprint:
-    @command -v ansible-playbook >/dev/null || { echo "ansible-playbook is required" >&2; exit 1; }
-    @command -v sshpass >/dev/null || { echo "sshpass is required for Ansible --ask-pass" >&2; exit 1; }
-    @just _trust-host "{{ expected_fingerprint }}"
-    cd "{{ ansible_dir }}" && ansible-playbook -i "{{ inventory }}" playbooks/bootstrap-access.yml --ask-pass -e ansible_user=root
-    cd "{{ ansible_dir }}" && ansible-playbook -i "{{ inventory }}" playbooks/harden-ssh.yml
+# Trust the host, provision access, harden SSH, and converge the shared base.
+provision scope expected_fingerprint:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    case "{{ scope }}" in
+      public) inventory="{{ public_inventory }}" ;;
+      private) inventory="{{ private_inventory }}" ;;
+      *) echo "Scope must be public or private" >&2; exit 2 ;;
+    esac
+
+    command -v ansible-playbook >/dev/null || { echo "ansible-playbook is required" >&2; exit 1; }
+    password_args=(--ask-pass)
+    if [[ -n "${ANSIBLE_CONNECTION_PASSWORD_FILE:-}" ]]; then
+      password_args=(--connection-password-file "$ANSIBLE_CONNECTION_PASSWORD_FILE")
+    else
+      command -v sshpass >/dev/null || { echo "sshpass is required for Ansible --ask-pass" >&2; exit 1; }
+    fi
+
+    just _trust-host "{{ scope }}" "{{ expected_fingerprint }}"
+    cd "{{ ansible_dir }}"
+    ansible-playbook -i "$inventory" playbooks/shared/bootstrap-access.yml "${password_args[@]}" -e ansible_user=root
+    ansible-playbook -i "$inventory" playbooks/shared/harden-ssh.yml
+    ansible-playbook -i "$inventory" playbooks/shared/base.yml
 
 # Authorize Google Drive for sb-capture: one browser approval, once, ever.
 sb-capture-authorize scope="drive.file":
     cd "{{ ansible_dir }}" && ./scripts/sb-capture-authorize-drive "{{ scope }}"
 
-# Converge the complete declared server state and run all safety checks.
+# Converge the complete public service stack and run all safety checks.
 apply *ansible_args:
-    cd "{{ ansible_dir }}" && ansible-playbook -i "{{ inventory }}" playbooks/site.yml {{ ansible_args }}
+    cd "{{ ansible_dir }}" && ansible-playbook -i "{{ public_inventory }}" playbooks/public/site.yml {{ ansible_args }}
+
+# Converge the private server, including Tailscale, and run all safety checks.
+apply-private *ansible_args:
+    cd "{{ ansible_dir }}" && ansible-playbook -i "{{ private_inventory }}" playbooks/private/site.yml {{ ansible_args }}

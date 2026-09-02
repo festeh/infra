@@ -1,0 +1,42 @@
+---
+- name: Require the private inventory for the private server stack
+  hosts: shared_servers
+  gather_facts: false
+  tasks:
+    - name: Reject non-private hosts
+      ansible.builtin.assert:
+        that:
+          - server_scope == "private"
+        fail_msg: >-
+          The private site playbook can run only with the private inventory.
+  tags:
+    - always
+
+- name: Keep administrative access hardened
+  ansible.builtin.import_playbook: ../shared/harden-ssh.yml
+  tags:
+    - access
+
+- name: Converge the private server
+  hosts: shared_servers
+  become: true
+  gather_facts: true
+  serial: 1
+
+  roles:
+    - role: base
+      tags:
+        - base
+    - role: tailscale
+      tags:
+        - tailscale
+
+  post_tasks:
+    - name: Enforce the private-listener allowlist
+      ansible.builtin.include_role:
+        name: listener_audit
+        apply:
+          tags:
+            - always
+      tags:
+        - always

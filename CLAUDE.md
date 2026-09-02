@@ -1,31 +1,43 @@
 # Ansible Infrastructure
 
-This repository manages the IONOS VPS through Ansible. Run infrastructure
-operations from the repository root through `just`; do not expose individual
-Ansible phases as separate Just recipes.
+This repository manages the public IONOS service host and a private Tailscale
+server through Ansible. Run infrastructure operations from the repository root
+through `just`; do not expose individual Ansible phases as separate Just
+recipes.
 
 ## Command surface
 
-- `just bootstrap SHA256:...` is the one-time operation for a reinstalled VPS.
-  The ED25519 fingerprint must be obtained independently from the IONOS console.
-  Bootstrap compares it with the network key before sending the temporary root
-  password, creates `dima`, installs the controller SSH key, and verifies that
-  key-based administration works before disabling root/password SSH.
-- `just apply` repeatedly converges and verifies the complete declared state.
+- `just provision public SHA256:...` and
+  `just provision private SHA256:...` are the one-time server provisioning
+  operations. The ED25519 fingerprint must be obtained independently from the
+  corresponding provider console. Provisioning compares it with the network
+  key before sending the temporary root password, creates `dima`, installs the
+  controller SSH key, verifies key-based administration, disables root/password
+  SSH, and converges the shared operating-system baseline.
+- `just sb-capture-authorize` is the one-time Google Drive consent for
+  sb-capture. It runs rclone locally, opens a browser once, and writes the
+  encrypted credential into `sb_capture.vault.yml` itself. The consent does not
+  expire; nothing else about that service is manual.
+- `just apply` repeatedly converges and verifies only the public service host.
+- `just apply-private` repeatedly converges and verifies the private host,
+  including Tailscale. Its first run requires a one-off or restricted auth key
+  in the controller's `TAILSCALE_AUTH_KEY` environment variable; later runs use
+  the node's persistent identity and need no key.
 - Additional Ansible flags pass through the same command, for example
   `just apply --check --diff` or `just apply --tags base`.
 
-After bootstrap, root SSH, SSH password authentication, and the root password
-are disabled. Recovery therefore uses IONOS rescue/password-reset facilities,
-not an expected root-password login through the KVM console.
+After provisioning, root SSH, SSH password authentication, and the root
+password are disabled. Recovery therefore uses the corresponding provider's
+rescue/password-reset facilities, not an expected root-password login through
+the KVM console.
 
 ## Current deployed state
 
 The base state was deployed and reboot-tested on 2026-07-12. Caddy,
-PostgreSQL, CLIProxyAPI, Miniflux, dimalip.in, Papujki, Coach, and My Agents
-were restored by 2026-07-19:
+PostgreSQL, CLIProxyAPI, Miniflux, dimalip.in, Papujki, Coach, My Agents, and
+Syncthing were restored by 2026-07-19:
 
-- Production host: SSH alias `ionos`, inventory host `web_server`.
+- Public host: SSH alias `ionos`, inventory host `web_server`.
 - Operating system: Ubuntu 26.04 LTS.
 - Administration: key-based `dima` with non-interactive sudo.
 - Timezone: `Europe/Berlin`; Chrony is active and synchronized.
@@ -111,26 +123,63 @@ were restored by 2026-07-19:
   `--locked`, roll back failed service starts, and restart only
   `my-agents.service`. Runtime credentials remain in Ansible Vault and are not
   available to GitHub Actions or the deployment identity.
+- Syncthing 2.1.2 is active as the dedicated unprivileged `syncthing` account.
+  Its rotated device identity is
+  `PZTBJU7-PPJFEKC-LZPAYF2-RUGIGLV-Q62MSSJ-2AH2NN5-4JTCTJX-EIEKKAJ` and its
+  only non-loopback socket is the reviewed IPv4 TCP/22000 sync listener. The
+  authenticated GUI and API bind to `127.0.0.1:8384` with newly rotated Vault
+  credentials and have no Caddy route. QUIC, IPv6 sync, global/local discovery,
+  relays, NAT traversal, usage reporting, crash reporting, and self-upgrades
+  are disabled. The `vault` folder is receive-encrypted with one-year staggered
+  versioning; its encryption password exists only on trusted devices and is
+  absent from the VPS configuration. The laptop seeded 48 files and 13
+  directories, the VPS reports zero needed items, no plaintext Markdown names
+  exist on disk, and the systemd sandbox reports an exposure score of 1.5
+  (`OK`). The retired pre-compromise VPS identity was removed from the laptop
+  only after the rotated peer reached 100% completion. The phone still requires
+  the same one-time identity replacement.
+
+- sb capture is active as the dedicated unprivileged `sb-capture` account on
+  `127.0.0.1:8092`, serving the watch voice-capture pipeline for the `sb`
+  vault: it trims silence with ffmpeg, transcribes through ElevenLabs Scribe,
+  and archives the original recording to Google Drive with rclone. Caddy
+  publishes `capture.dimalip.in` as a machine-only bearer route with no browser
+  fallback; every other path returns 404. It never touches the vault — the VPS
+  holds that as an encrypted Syncthing peer and the phone writes the
+  transcript. Audio is trimmed and transcribed in a tmpfs `RuntimeDirectory`
+  and deleted immediately; the idempotency cache is memory-only with a one-hour
+  TTL so transcripts never reach this disk. A failed Drive upload spools to
+  `/var/lib/sb-capture/spool` and a 15-minute timer drains it; `/health`
+  reports the spool depth. Unlike the loopback-only services here its sandbox
+  permits egress, since it must reach ElevenLabs and Google. Its Drive consent
+  is a one-time browser approval performed by `just sb-capture-authorize`.
 
 The base state has been verified across a real reboot and with a negative
 listener-audit test. The restored sites passed their dry runs, Caddy
 configuration, log-redaction and retention assertions, public CLIProxyAPI and
 Miniflux route/authentication checks, one model smoke test per provider,
-static-site, Coach authentication/database/sandbox, negative-shell deployment
-tests, the listener audit, and complete idempotence applies.
+static-site, Coach authentication/database/sandbox, negative-shell deployment,
+Syncthing authentication/encryption/listener/seed checks, the listener audit,
+and complete idempotence applies.
 
 ## Restoration scope
 
-`docs/service-inventory.md` is authoritative. The retained production scope is
+`docs/service-inventory.md` is authoritative. The retained public scope is
 Caddy, OAuth2 Proxy, PostgreSQL, CLIProxyAPI/ai, Miniflux/rss, Coach, My Agents
 with only the Coach agent, dimalip.in, Papujki, and Syncthing. Coach owns a
 dedicated PostgreSQL database.
 
 ## Ansible structure
 
-- `ansible/playbooks/site.yml` is the only repeatable site entry point.
-- `ansible/playbooks/harden-ssh.yml` is the bootstrap/site wrapper for the
+- `ansible/playbooks/public/site.yml` is the only application-stack entry point
+  and must never run with the private inventory.
+- `ansible/playbooks/shared/harden-ssh.yml` is the provisioning/public-site
+  wrapper for the
   `access` role, which continuously verifies the SSH access invariants.
+- `ansible/playbooks/shared/bootstrap-access.yml` and `base.yml` own the other
+  shared provisioning phases.
+- `ansible/playbooks/private/site.yml` is the repeatable private entry point;
+  it applies the shared baseline and Tailscale only.
 - `ansible/roles/access` owns SSH hardening and root-password locking.
 - `ansible/roles/base` owns packages, upgrades, time, journald, and reboot
   handling.
@@ -156,6 +205,16 @@ dedicated PostgreSQL database.
 - `ansible/roles/my_agents` owns its unprivileged service, protected runtime
   environment, persistent SQLite state, systemd sandbox, narrow authenticated
   Caddy route, initial release construction, and service-specific checks.
+- `ansible/roles/syncthing` owns the signed stable-v2 package source, rotated
+  device identity and GUI/API credentials, receive-encrypted vault declaration,
+  trusted-peer IDs, versioning, systemd sandbox, exact listener shape, seeded
+  data minimums, and service-specific checks. It never receives the trusted
+  peers' folder-encryption password.
+- `ansible/roles/tailscale` owns the signed stable package source, fixed
+  UDP/41641 peer port, private MagicDNS name, conservative client preferences,
+  first-time enrollment, and online-state verification. Enrollment consumes a
+  controller environment auth key through a temporary root-only file and never
+  persists that key.
 - `ansible/roles/binary_release` implements the shared restricted deployment
   identity, checksum-addressed binary receiver, atomic activation/rollback,
   retention, exact-unit restart permission, and active-binary validation used
@@ -169,25 +228,38 @@ dedicated PostgreSQL database.
   permission, and virtual-environment validation for Python services.
 - `ansible/roles/runtime_secrets` owns protected per-service secret files.
 - `ansible/roles/listener_audit` installs and runs the listener guard.
-- Production variables live below
-  `ansible/inventories/production/group_vars/`.
+- Public application variables live below
+  `ansible/inventories/public/group_vars/`. The private inventory contains only
+  its Tailscale declaration and no Vault files.
 
-Roles own service configuration and must be idempotent. A second `just apply`
-after any completed change should report `changed=0`.
+Roles own service configuration and must be idempotent. A second run of the
+applicable `just apply` or `just apply-private` command after any completed
+change should report `changed=0`.
 
 ## Network exposure invariant
 
-The listener audit runs at the end of every `just apply`, including check mode.
-It ignores `127.0.0.0/8` and `::1` listeners. Every socket on a wildcard,
-interface, or other non-loopback address must match the production allowlist by
-protocol, port, and process. Linux process names reported by `ss` may be
-truncated to 15 characters.
+The listener audit runs at the end of every `just apply` and
+`just apply-private`, including check mode. It ignores `127.0.0.0/8` and `::1`
+listeners. Every socket on a wildcard, interface, or other non-loopback address
+must match the scope-specific allowlist by protocol, port, and process. Linux
+process names reported by `ss` may be truncated to 15 characters.
 
-The current allowlist contains only:
+The public allowlist contains only:
 
 - TCP/22 owned by `sshd` (one IPv4 and one IPv6 socket).
 - TCP/80 and TCP/443 owned by `caddy` (one IPv4/IPv6 wildcard socket each).
+- TCP/22000 owned by `syncthing` (one IPv4-only sync socket).
 - UDP/68 owned by `systemd-network`, the image's DHCP client.
+
+The private allowlist contains TCP/22 from `sshd`, UDP/68 from the image's DHCP
+client, and Tailscale's explicitly fixed UDP/41641 peer socket from
+`tailscaled`. It also permits `tailscaled`'s dynamic TCP PeerAPI listeners only
+when they bind within Tailscale's private `100.64.0.0/10` or
+`fd7a:115c:a1e0::/48` ranges; the same ports remain forbidden on wildcard and
+public addresses. Tailscale SSH remains disabled; clients use the existing
+hardened OpenSSH service over the tailnet. The provider firewall should allow
+inbound UDP/41641 to maximize direct peer connections, while Tailscale can use
+a relay when a direct path is unavailable.
 
 Caddy's admin API on `127.0.0.1:2019` is ignored as loopback. HTTP/3 is
 deliberately disabled, so Caddy must not own UDP/443.
@@ -218,8 +290,8 @@ For each service restored after the rebuild:
 5. Add a Caddy route only when intentional public access and authentication
    have been reviewed. A loopback bind does not prevent Caddy from exposing a
    service.
-6. Add a public-listener rule only for genuine edge services such as SSH or
-   Caddy.
+6. Add a public-listener rule only for genuine edge services such as SSH/Caddy
+   or an explicitly reviewed peer transport such as Syncthing TCP/22000.
 7. Run `just apply --check --diff`, then `just apply`, then `just apply` again
    to prove idempotence.
 
@@ -229,30 +301,33 @@ Never print or commit secret values. Treat every credential present on the
 compromised VPS as exposed and rotate it before restoring the corresponding
 service.
 
-The production Vault password is stored as `ANSIBLE_VAULT_PASSWORD` in the
+The public Vault password is stored as `ANSIBLE_VAULT_PASSWORD` in the
 ignored `~/dotfiles/.env`, which must remain owned by the current user with mode
 `0600`. Its recovery copy belongs in the Bitwarden item
-`infra: production Ansible Vault`. The checked-in
+`infra: public Ansible Vault`. The checked-in
 `ansible/scripts/vault-password-client` is the only supported password bridge;
 do not add a plaintext vault-password file.
 
-Encrypted production values live below
-`ansible/inventories/production/group_vars/all/`; shared service values use
+Encrypted public-service values live below
+`ansible/inventories/public/group_vars/all/`; shared service values use
 `vault.yml` and separately reviewable service files may use inline `!vault`
-values such as `coach.vault.yml`. Service roles map those values into
-`runtime_secret_files`; the `runtime_secrets` role writes root-owned `0640`
-files below `/etc/<service>/` with `no_log: true` and diffs disabled. Do not run
-secret-bearing tasks with `ANSIBLE_DEBUG=1`, and never give routine application
-deployment workflows the Vault password.
+values such as `coach.vault.yml` and `syncthing.vault.yml`. Service roles map
+runtime-file values into `runtime_secret_files`; the `runtime_secrets` role
+writes root-owned `0640` files below `/etc/<service>/` with `no_log: true` and
+diffs disabled. Do not run secret-bearing tasks with `ANSIBLE_DEBUG=1`, and
+never give routine application deployment workflows the Vault password.
 
-The ignored plaintext `ansible/secrets.yml` contains untrusted historical
-values and is not an approved source for the rebuilt server. Migrate only
-rotated values into encrypted production variables when service restoration
-begins. Do not copy old values into a new vault merely to preserve the previous
-deployment.
+The ignored plaintext `ansible/secrets.yml` is not an approved source for the
+rebuilt server. Its application values are untrusted historical material. Its
+mode-`0600` Syncthing folder-encryption password is retained only as a
+controller-side recovery copy for trusted peers, matches the active laptop
+configuration, and must never be referenced by the Syncthing role or sent to
+the VPS. Migrate only rotated server-side values into encrypted public
+variables; do not copy old application values into a new vault merely to
+preserve the previous deployment.
 
 Obsolete standalone playbooks, global templates, the duplicate inventory, and
 the mise configuration were deleted; use Git history when their previous logic
 needs to be inspected. New service configuration belongs only in roles included
-by `site.yml`. `just` is the infrastructure task interface; do not reintroduce
-mise as the task runner.
+by `playbooks/public/site.yml`. `just` is the infrastructure task interface; do
+not reintroduce mise as the task runner.

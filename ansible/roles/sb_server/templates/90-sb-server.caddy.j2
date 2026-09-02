@@ -1,0 +1,36 @@
+# Managed by Ansible. Machine-only endpoint: the sb apps and the CLI are the
+# clients, so there is no browser route and no basic-auth fallback. sb-server
+# itself remains loopback-only.
+{{ sb_server_domain }} {
+	import infra_site
+	encode zstd gzip
+
+	header {
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Frame-Options "DENY"
+	}
+
+	# Liveness only: counts, no content, and it has to answer when the token
+	# is the thing that broke.
+	handle /health {
+		reverse_proxy {{ sb_server_host }}:{{ sb_server_port }}
+	}
+
+	@machine_bearer header Authorization "Bearer {{ sb_server_secrets.api_token }}"
+	handle @machine_bearer {
+		# Sync clients hold a changes request open for up to 90 s waiting for
+		# the log to move, and a three-minute voice memo on a slow uplink needs
+		# room too; both must outlast the client's own timeout, not the proxy's.
+		reverse_proxy {{ sb_server_host }}:{{ sb_server_port }} {
+			header_up -Cookie
+			transport http {
+				read_timeout {{ sb_server_long_poll_timeout }}
+				write_timeout {{ sb_server_long_poll_timeout }}
+			}
+		}
+	}
+
+	handle {
+		respond 404
+	}
+}

@@ -1,0 +1,352 @@
+---
+- name: Require a supported Tailscale declaration
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['distribution'] == 'Ubuntu'
+      - ansible_facts['distribution_release'] | length > 0
+      - tailscale_hostname is match('^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$')
+      - tailscale_port is number
+      - tailscale_port | int > 0
+      - tailscale_port | int < 65536
+      - tailscale_accept_dns is boolean
+      - tailscale_accept_routes is boolean
+      - tailscale_ssh is boolean
+    fail_msg: The Tailscale platform or configuration is invalid.
+    quiet: true
+
+- name: Read installed package facts
+  ansible.builtin.package_facts:
+    manager: auto
+
+- name: Record whether Tailscale was installed before this run
+  ansible.builtin.set_fact:
+    tailscale_installed_before_apply: "{{ 'tailscale' in ansible_facts.packages }}"
+
+- name: Check for the pinned Tailscale repository key
+  ansible.builtin.stat:
+    path: "{{ tailscale_repository_key_path }}"
+  register: tailscale_repository_key_before_apply
+
+- name: Install Tailscale repository prerequisites
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - gnupg
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+
+- name: Create the APT keyring directory
+  ansible.builtin.file:
+    path: "{{ tailscale_repository_key_path | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the checksum-pinned Tailscale repository key
+  ansible.builtin.get_url:
+    url: "{{ tailscale_repository_key_url }}"
+    dest: "{{ tailscale_repository_key_path }}"
+    checksum: "{{ tailscale_repository_key_checksum }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Defer Tailscale installation during its first check-mode run
+  ansible.builtin.meta: end_role
+  when:
+    - ansible_check_mode
+    - not tailscale_repository_key_before_apply.stat.exists
+
+- name: Read the Tailscale repository signing-key fingerprint
+  ansible.builtin.command:
+    argv:
+      - gpg
+      - --batch
+      - --show-keys
+      - --with-colons
+      - --fingerprint
+      - "{{ tailscale_repository_key_path }}"
+  register: tailscale_repository_key_details
+  check_mode: false
+  changed_when: false
+
+- name: Require the reviewed Tailscale repository signing key
+  ansible.builtin.assert:
+    that:
+      - >-
+        ('fpr:::::::::' ~ tailscale_repository_key_fingerprint ~ ':')
+        in tailscale_repository_key_details.stdout
+    fail_msg: >-
+      The Tailscale repository key does not match the reviewed primary
+      fingerprint {{ tailscale_repository_key_fingerprint }}.
+    quiet: true
+
+- name: Configure the official Tailscale stable repository
+  ansible.builtin.copy:
+    content: |
+      Types: deb
+      URIs: {{ tailscale_repository_url }}
+      Suites: {{ ansible_facts['distribution_release'] }}
+      Components: main
+      Signed-By: {{ tailscale_repository_key_path }}
+    dest: "{{ tailscale_repository_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+  register: tailscale_repository_config
+
+- name: Refresh APT metadata after configuring the Tailscale repository
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 0
+  when: tailscale_repository_config.changed
+
+- name: Install or upgrade Tailscale from the stable channel
+  ansible.builtin.apt:
+    name: tailscale
+    state: latest
+    update_cache: true
+    cache_valid_time: 3600
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  register: tailscale_package_result
+
+- name: Defer Tailscale configuration during its first check-mode run
+  ansible.builtin.meta: end_role
+  when:
+    - ansible_check_mode
+    - not tailscale_installed_before_apply
+
+- name: Pin the reviewed Tailscale WireGuard port
+  ansible.builtin.lineinfile:
+    path: /etc/default/tailscaled
+    regexp: '^PORT='
+    line: 'PORT="{{ tailscale_port }}"'
+    owner: root
+    group: root
+    mode: "0644"
+  register: tailscale_daemon_port
+
+- name: Enable Tailscale and load the managed daemon configuration
+  ansible.builtin.systemd_service:
+    name: tailscaled.service
+    enabled: true
+    state: >-
+      {{ 'restarted'
+         if (tailscale_package_result.changed or tailscale_daemon_port.changed)
+         else 'started' }}
+
+- name: Read the initial Tailscale state
+  ansible.builtin.command:
+    argv:
+      - tailscale
+      - status
+      - --json
+  register: tailscale_initial_status_result
+  check_mode: false
+  changed_when: false
+  until: >-
+    (tailscale_initial_status_result.stdout | from_json).BackendState
+    != 'Starting'
+  retries: 10
+  delay: 1
+
+- name: Decode the initial Tailscale state
+  ansible.builtin.set_fact:
+    tailscale_initial_status: "{{ tailscale_initial_status_result.stdout | from_json }}"
+
+- name: Require an auth key for first-time Tailscale enrollment
+  ansible.builtin.fail:
+    msg: >-
+      This host has not joined a tailnet. Export a one-off or restricted
+      TAILSCALE_AUTH_KEY on the controller and run the private apply again.
+  when:
+    - not ansible_check_mode
+    - tailscale_initial_status.BackendState in ['NeedsLogin', 'NoState']
+    - tailscale_auth_key | length == 0
+
+- name: Enroll the private server in Tailscale
+  when:
+    - not ansible_check_mode
+    - tailscale_initial_status.BackendState in ['NeedsLogin', 'NoState']
+    - tailscale_auth_key | length > 0
+  block:
+    - name: Create a temporary Tailscale auth-key file
+      ansible.builtin.tempfile:
+        state: file
+        prefix: ansible-tailscale-auth-
+      register: tailscale_auth_key_file
+
+    - name: Write the temporary Tailscale auth key
+      ansible.builtin.copy:
+        content: "{{ tailscale_auth_key }}"
+        dest: "{{ tailscale_auth_key_file.path }}"
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+
+    - name: Join the tailnet with the managed client preferences
+      ansible.builtin.command:
+        argv:
+          - tailscale
+          - up
+          - "--auth-key=file:{{ tailscale_auth_key_file.path }}"
+          - "--hostname={{ tailscale_hostname }}"
+          - "--accept-dns={{ tailscale_accept_dns | ternary('true', 'false') }}"
+          - "--accept-routes={{ tailscale_accept_routes | ternary('true', 'false') }}"
+          - "--ssh={{ tailscale_ssh | ternary('true', 'false') }}"
+          - --timeout=30s
+      register: tailscale_enrollment_result
+      changed_when: true
+  always:
+    - name: Remove the temporary Tailscale auth-key file
+      ansible.builtin.file:
+        path: "{{ tailscale_auth_key_file.path }}"
+        state: absent
+      when: tailscale_auth_key_file.path is defined
+
+- name: Bring an authenticated Tailscale node online
+  ansible.builtin.command:
+    argv:
+      - tailscale
+      - up
+      - "--hostname={{ tailscale_hostname }}"
+      - "--accept-dns={{ tailscale_accept_dns | ternary('true', 'false') }}"
+      - "--accept-routes={{ tailscale_accept_routes | ternary('true', 'false') }}"
+      - "--ssh={{ tailscale_ssh | ternary('true', 'false') }}"
+      - --timeout=30s
+  when:
+    - not ansible_check_mode
+    - tailscale_initial_status.BackendState == 'Stopped'
+  register: tailscale_up_result
+  changed_when: true
+
+- name: Read the active Tailscale state
+  ansible.builtin.command:
+    argv:
+      - tailscale
+      - status
+      - --json
+  register: tailscale_active_status_result
+  check_mode: false
+  changed_when: false
+  until: >-
+    (tailscale_active_status_result.stdout | from_json).BackendState
+    != 'Starting'
+  retries: 10
+  delay: 1
+
+- name: Decode the active Tailscale state
+  ansible.builtin.set_fact:
+    tailscale_active_status: "{{ tailscale_active_status_result.stdout | from_json }}"
+
+- name: Require an online Tailscale node with an assigned address
+  ansible.builtin.assert:
+    that:
+      - tailscale_active_status.BackendState == 'Running'
+      - tailscale_active_status.Self.Online | bool
+      - tailscale_active_status.TailscaleIPs | default([]) | length > 0
+    fail_msg: >-
+      Tailscale is not online. If device approval is enabled, approve this node
+      in the Tailscale admin console and run the private apply again.
+    quiet: true
+  when: not ansible_check_mode
+
+- name: Inspect the managed Tailscale peer listener
+  ansible.builtin.command:
+    argv:
+      - ss
+      - -H
+      - -lunp
+      - "sport = :{{ tailscale_port }}"
+  register: tailscale_peer_listener_result
+  check_mode: false
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Require the managed Tailscale peer listener
+  ansible.builtin.assert:
+    that:
+      - tailscale_peer_listener_result.stdout | length > 0
+      - "'tailscaled' in tailscale_peer_listener_result.stdout"
+    fail_msg: >-
+      tailscaled is not listening on the reviewed UDP port
+      {{ tailscale_port }}.
+    quiet: true
+  when: not ansible_check_mode
+
+- name: Read the active Tailscale client preferences
+  ansible.builtin.command:
+    argv:
+      - tailscale
+      - get
+      - --json
+      - all
+  register: tailscale_preferences_result
+  check_mode: false
+  changed_when: false
+  when:
+    - not ansible_check_mode
+    - tailscale_active_status.BackendState == 'Running'
+
+- name: Decode the active Tailscale client preferences
+  ansible.builtin.set_fact:
+    tailscale_preferences: "{{ tailscale_preferences_result.stdout | from_json }}"
+  when:
+    - not ansible_check_mode
+    - tailscale_active_status.BackendState == 'Running'
+
+- name: Converge the managed Tailscale client preferences
+  ansible.builtin.command:
+    argv:
+      - tailscale
+      - set
+      - "--hostname={{ tailscale_hostname }}"
+      - "--accept-dns={{ tailscale_accept_dns | ternary('true', 'false') }}"
+      - "--accept-routes={{ tailscale_accept_routes | ternary('true', 'false') }}"
+      - "--ssh={{ tailscale_ssh | ternary('true', 'false') }}"
+  when:
+    - not ansible_check_mode
+    - tailscale_active_status.BackendState == 'Running'
+    - >-
+      tailscale_preferences.hostname != tailscale_hostname or
+      tailscale_preferences['accept-dns'] != tailscale_accept_dns or
+      tailscale_preferences['accept-routes'] != tailscale_accept_routes or
+      tailscale_preferences.ssh != tailscale_ssh
+  register: tailscale_preferences_update
+  changed_when: true
+
+- name: Verify the managed Tailscale client preferences
+  ansible.builtin.command:
+    argv:
+      - tailscale
+      - get
+      - --json
+      - all
+  register: tailscale_verified_preferences_result
+  check_mode: false
+  changed_when: false
+  when:
+    - not ansible_check_mode
+    - tailscale_active_status.BackendState == 'Running'
+
+- name: Require the managed Tailscale client preferences
+  ansible.builtin.assert:
+    that:
+      - tailscale_verified_preferences.hostname == tailscale_hostname
+      - tailscale_verified_preferences['accept-dns'] == tailscale_accept_dns
+      - tailscale_verified_preferences['accept-routes'] == tailscale_accept_routes
+      - tailscale_verified_preferences.ssh == tailscale_ssh
+    fail_msg: Tailscale did not retain the managed client preferences.
+    quiet: true
+  vars:
+    tailscale_verified_preferences: >-
+      {{ tailscale_verified_preferences_result.stdout | from_json }}
+  when:
+    - not ansible_check_mode
+    - tailscale_active_status.BackendState == 'Running'

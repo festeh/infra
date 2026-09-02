@@ -5,22 +5,22 @@ After=network-online.target
 
 [Service]
 Type=oneshot
-User={{ sb_capture_user }}
-Group={{ sb_capture_group }}
-WorkingDirectory={{ sb_capture_state_directory }}
-Environment=HOME={{ sb_capture_state_directory }}
-Environment=RCLONE_CONFIG={{ sb_capture_rclone_working_config }}
+User={{ sb_server_user }}
+Group={{ sb_server_group }}
+WorkingDirectory={{ sb_server_state_directory }}
+Environment=HOME={{ sb_server_state_directory }}
+Environment=RCLONE_CONFIG={{ sb_server_rclone_working_config }}
 # rclone must be able to rewrite its own config when it refreshes a token,
 # so it works from a copy in the state directory. Seeded on demand; the role
 # deletes the copy whenever the canonical credential changes.
-ExecStartPre=/bin/sh -c 'test -f {{ sb_capture_rclone_working_config }} || install -m 0600 {{ sb_capture_rclone_config_path }} {{ sb_capture_rclone_working_config }}'
-ExecStart={{ sb_capture_binary_path }} drain {{ sb_capture_config_path }}
+ExecStartPre=/bin/sh -c 'test -f {{ sb_server_rclone_working_config }} || install -m 0600 {{ sb_server_rclone_config_path }} {{ sb_server_rclone_working_config }}'
+ExecStart={{ sb_server_binary_path }} drain {{ sb_server_config_path }}
 # A drain that fails because Drive is still unreachable is expected; the spool
 # simply stays put until the next run.
 SuccessExitStatus=0 1
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=sb-capture-drain
+SyslogIdentifier=sb-server-drain
 
 NoNewPrivileges=true
 PrivateDevices=true
@@ -46,5 +46,5 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 IPAddressDeny=
 CapabilityBoundingSet=
 AmbientCapabilities=
-ReadOnlyPaths={{ sb_capture_install_root }} {{ sb_capture_config_directory }}
-ReadWritePaths={{ sb_capture_state_directory }}
+ReadOnlyPaths={{ sb_server_install_root }} {{ sb_server_config_directory }}
+ReadWritePaths={{ sb_server_state_directory }}
