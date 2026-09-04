@@ -8,12 +8,14 @@ base_packages:
   - ca-certificates
   - chrony
   - curl
+  - fd-find
   - git
   - iproute2
   - jq
   - needrestart
   - python3-apt
   - python3-debian
+  - ripgrep
   - rsync
   - tzdata
   - unattended-upgrades

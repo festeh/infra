@@ -1,2 +1,4 @@
 __pycache__/
 ansible/inventory.yml
+ansible/inventories/private/group_vars/all/local.yml
+ansible/inventories/private/group_vars/all/.paseo-password

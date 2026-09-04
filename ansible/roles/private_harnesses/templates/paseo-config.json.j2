@@ -1,0 +1,49 @@
+{
+  "$schema": "https://paseo.sh/schemas/paseo.config.v1.json",
+  "version": 1,
+  "daemon": {
+    "listen": {{ (private_harnesses_tailscale_ipv4 ~ ':' ~ private_harnesses_paseo_port) | to_json }},
+    "hostnames": [
+      {{ tailscale_hostname | to_json }},
+      {{ private_harnesses_tailscale_dns_name | to_json }}
+    ],
+    "cors": {
+      "allowedOrigins": [
+        {{ ('http://' ~ private_harnesses_tailscale_ipv4 ~ ':' ~ private_harnesses_paseo_port) | to_json }},
+        {{ ('http://' ~ tailscale_hostname ~ ':' ~ private_harnesses_paseo_port) | to_json }},
+        {{ ('http://' ~ private_harnesses_tailscale_dns_name ~ ':' ~ private_harnesses_paseo_port) | to_json }}
+      ]
+    },
+    "mcp": {
+      "enabled": true,
+      "injectIntoAgents": true
+    },
+    "relay": {
+      "enabled": false
+    }
+  },
+  "features": {
+    "dictation": {
+      "enabled": false
+    },
+    "voiceMode": {
+      "enabled": false
+    },
+    "webUi": {
+      "enabled": true
+    }
+  },
+  "agents": {
+    "providers": {
+      "omp": {
+        "enabled": true,
+        "command": [{{ private_harnesses_omp_binary | to_json }}]
+      },
+      "kimi": {
+        "extends": "acp",
+        "label": "Kimi Code",
+        "command": [{{ private_harnesses_kimi_binary | to_json }}, "acp"]
+      }
+    }
+  }
+}

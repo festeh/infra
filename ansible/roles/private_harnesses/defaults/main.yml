@@ -1,0 +1,63 @@
+---
+private_harnesses_user: dima
+private_harnesses_group: dima
+private_harnesses_home: /home/dima
+
+private_harnesses_mise_version: 2026.9.1
+private_harnesses_mise_binary: /usr/local/bin/mise
+private_harnesses_mise_config_directory: >-
+  {{ private_harnesses_home }}/.config/mise
+private_harnesses_mise_config: >-
+  {{ private_harnesses_mise_config_directory }}/config.toml
+private_harnesses_mise_lock: >-
+  {{ private_harnesses_mise_config_directory }}/mise.lock
+private_harnesses_mise_data_directory: >-
+  {{ private_harnesses_home }}/.local/share/mise
+private_harnesses_mise_cache_directory: >-
+  {{ private_harnesses_home }}/.cache/mise
+private_harnesses_mise_environment:
+  HOME: "{{ private_harnesses_home }}"
+  MISE_GLOBAL_CONFIG_FILE: "{{ private_harnesses_mise_config }}"
+  MISE_CONFIG_DIR: "{{ private_harnesses_mise_config_directory }}"
+  MISE_DATA_DIR: "{{ private_harnesses_mise_data_directory }}"
+  MISE_CACHE_DIR: "{{ private_harnesses_mise_cache_directory }}"
+  MISE_CEILING_PATHS: "{{ private_harnesses_mise_config_directory }}"
+  MISE_NPM_PACKAGE_MANAGER: aube
+  MISE_YES: "1"
+
+private_harnesses_omp_version: 18.1.7
+private_harnesses_omp_binary: /usr/local/bin/omp
+
+private_harnesses_kimi_version: 0.40.1
+private_harnesses_kimi_binary: /usr/local/bin/kimi
+private_harnesses_kimi_base_url: https://api.kimi.com/coding/v1
+private_harnesses_kimi_default_model: kimi-for-coding
+
+private_harnesses_node_version: 24.20.0
+private_harnesses_paseo_version: 0.7.2
+private_harnesses_paseo_binary: /usr/local/bin/paseo
+private_harnesses_paseo_home: "{{ private_harnesses_home }}/.paseo"
+private_harnesses_paseo_port: 6767
+private_harnesses_paseo_service: paseo.service
+private_harnesses_controller_paseo_password_file: >-
+  {{ inventory_dir }}/group_vars/all/.paseo-password
+
+private_harnesses_secret_directory: >-
+  {{ private_harnesses_home }}/.config/private-harnesses
+private_harnesses_paseo_environment_file: >-
+  {{ private_harnesses_secret_directory }}/paseo.env
+private_harnesses_omp_environment_file: >-
+  {{ private_harnesses_secret_directory }}/omp.env
+private_harnesses_legacy_environment_file: >-
+  {{ private_harnesses_secret_directory }}/runtime.env
+private_harnesses_kimi_home: "{{ private_harnesses_home }}/.kimi-code"
+private_harnesses_kimi_config: "{{ private_harnesses_kimi_home }}/config.toml"
+
+private_harnesses_legacy_install_roots:
+  - /opt/private-harnesses
+  - /opt/paseo
+  - "{{ private_harnesses_mise_data_directory }}/installs/node/22.22.1"
+
+private_harnesses_kimi_api_key: "{{ lookup('ansible.builtin.env', 'KIMI_API_KEY') }}"
+private_harnesses_ollama_api_key: "{{ lookup('ansible.builtin.env', 'OLLAMA_API_KEY') }}"
+private_harnesses_ollama_base_url: https://ollama.com

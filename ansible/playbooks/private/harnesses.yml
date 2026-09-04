@@ -1,0 +1,34 @@
+---
+- name: Require the private inventory for coding harnesses
+  hosts: shared_servers
+  gather_facts: false
+  tasks:
+    - name: Reject non-private hosts
+      ansible.builtin.assert:
+        that:
+          - server_scope == "private"
+        fail_msg: >-
+          The private harness playbook can run only with the private inventory.
+  tags:
+    - always
+
+- name: Converge private coding harnesses through mise
+  hosts: shared_servers
+  become: true
+  gather_facts: true
+  serial: 1
+
+  roles:
+    - role: private_harnesses
+      tags:
+        - private_harnesses
+
+  post_tasks:
+    - name: Enforce the private-listener allowlist
+      ansible.builtin.include_role:
+        name: listener_audit
+        apply:
+          tags:
+            - always
+      tags:
+        - always

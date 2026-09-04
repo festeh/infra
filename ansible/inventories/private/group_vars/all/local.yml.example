@@ -1,0 +1,5 @@
+---
+# Copy this file to local.yml and replace the placeholder with one or more
+# administrator public keys. local.yml is intentionally ignored by Git.
+access_additional_authorized_keys:
+  - "ssh-ed25519 <PUBLIC_KEY> termius-android-private"

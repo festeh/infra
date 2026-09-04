@@ -1,0 +1,23 @@
+---
+- name: Require the private inventory for mise setup
+  hosts: shared_servers
+  gather_facts: false
+  tasks:
+    - name: Reject non-private hosts
+      ansible.builtin.assert:
+        that:
+          - server_scope == "private"
+        fail_msg: The private mise playbook can run only with the private inventory.
+  tags:
+    - always
+
+- name: Bootstrap mise on the private server
+  hosts: shared_servers
+  become: true
+  gather_facts: true
+  serial: 1
+
+  roles:
+    - role: mise
+      tags:
+        - mise

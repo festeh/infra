@@ -1,0 +1,11 @@
+#!/bin/bash
+set -o errexit -o nounset
+export KIMI_CODE_NO_AUTO_UPDATE=1
+export MISE_GLOBAL_CONFIG_FILE={{ private_harnesses_mise_config | quote }}
+export MISE_CONFIG_DIR={{ private_harnesses_mise_config_directory | quote }}
+export MISE_DATA_DIR={{ private_harnesses_mise_data_directory | quote }}
+export MISE_CACHE_DIR={{ private_harnesses_mise_cache_directory | quote }}
+export MISE_CEILING_PATHS={{ private_harnesses_mise_config_directory | quote }}
+export MISE_EXEC_AUTO_INSTALL=0
+exec {{ private_harnesses_mise_binary | quote }} \
+  -C {{ private_harnesses_mise_config_directory | quote }} exec -- kimi "$@"

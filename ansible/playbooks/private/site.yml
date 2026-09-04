@@ -31,12 +31,8 @@
       tags:
         - tailscale
 
-  post_tasks:
-    - name: Enforce the private-listener allowlist
-      ansible.builtin.include_role:
-        name: listener_audit
-        apply:
-          tags:
-            - always
-      tags:
-        - always
+- name: Bootstrap mise before its managed tools
+  ansible.builtin.import_playbook: mise.yml
+
+- name: Converge the mise-managed private harnesses
+  ansible.builtin.import_playbook: harnesses.yml

@@ -1,2 +1,4 @@
 ---
 access_admin_user: dima
+access_admin_group: "{{ access_admin_user }}"
+access_additional_authorized_keys: []

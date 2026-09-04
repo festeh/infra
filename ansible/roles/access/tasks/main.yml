@@ -11,6 +11,48 @@
   check_mode: false
   changed_when: false
 
+- name: Require additional administrator keys to be a list
+  ansible.builtin.assert:
+    that:
+      - access_additional_authorized_keys is sequence
+      - access_additional_authorized_keys is not string
+    fail_msg: access_additional_authorized_keys must be a list of SSH public keys.
+
+- name: Validate additional administrator public keys
+  ansible.builtin.assert:
+    that:
+      - item is string
+      - item is match('^ssh-ed25519 [A-Za-z0-9+/]+={0,3}( .*)?$')
+    fail_msg: An additional administrator key is not a valid ED25519 public key.
+  loop: "{{ access_additional_authorized_keys }}"
+  loop_control:
+    label: redacted-public-key
+  no_log: true
+
+- name: Keep the administrator SSH directory protected
+  become: true
+  ansible.builtin.file:
+    path: "/home/{{ access_admin_user }}/.ssh"
+    state: directory
+    owner: "{{ access_admin_user }}"
+    group: "{{ access_admin_group }}"
+    mode: "0700"
+
+- name: Preserve additional administrator SSH keys
+  become: true
+  ansible.builtin.lineinfile:
+    path: "/home/{{ access_admin_user }}/.ssh/authorized_keys"
+    line: "{{ item | trim }}"
+    create: true
+    owner: "{{ access_admin_user }}"
+    group: "{{ access_admin_group }}"
+    mode: "0600"
+    state: present
+  loop: "{{ access_additional_authorized_keys }}"
+  loop_control:
+    label: redacted-public-key
+  no_log: true
+
 - name: Ensure the OpenSSH drop-in directory exists
   become: true
   ansible.builtin.file:

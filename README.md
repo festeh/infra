@@ -34,6 +34,7 @@ ansible/
     ├── my_agents/
     ├── papujki/
     ├── postgresql/
+    ├── private_harnesses/
     ├── runtime_secrets/
     ├── static_release/
     ├── syncthing/
@@ -44,8 +45,9 @@ docs/
 ```
 
 Public service configuration belongs in roles included by
-`playbooks/public/site.yml`. The private site playbook adds Tailscale to the
-shared access, hardening, and operating-system baseline.
+`playbooks/public/site.yml`. The private site playbook adds Tailscale and the
+private coding harnesses to the shared access, hardening, and operating-system
+baseline.
 Obsolete standalone playbooks and global templates were deleted; Git history
 retains their previous implementation.
 
@@ -127,6 +129,22 @@ state directory:
 just apply-private
 ```
 
+Additional administrator SSH keys can be preserved by Ansible without storing
+them in Git. Copy the private inventory's `local.yml.example` to `local.yml`,
+replace the placeholder with the public key, and restrict the local file:
+
+```bash
+cp ansible/inventories/private/group_vars/all/local.yml.example \
+  ansible/inventories/private/group_vars/all/local.yml
+chmod 600 ansible/inventories/private/group_vars/all/local.yml
+just apply-private
+```
+
+The inventory loads `local.yml` automatically, Git ignores it, and the access
+role ensures every listed key remains in the administrator's
+`authorized_keys`. Omitting a key does not revoke it; remove retired keys from
+the server explicitly.
+
 The role installs the latest package from Tailscale's signed stable repository,
 uses the MagicDNS name `private`, accepts tailnet DNS, declines subnet routes,
 and keeps Tailscale SSH disabled in favor of the existing hardened OpenSSH
@@ -136,6 +154,53 @@ direct connections. Tailscale can still relay traffic when a direct path is not
 available. Its HTTP PeerAPI uses dynamic TCP ports bound only to this node's
 private Tailscale IPv4 and IPv6 addresses; the listener audit permits those
 sockets without permitting the same ports on public or wildcard addresses.
+
+### Private coding harnesses
+
+The private stack keeps mise bootstrap and harness convergence in separate
+playbooks. `playbooks/private/mise.yml` installs checksum-pinned mise 2026.9.1
+and its private user directories; `playbooks/private/harnesses.yml` installs
+the committed, locked tool declaration. The main private site imports both in
+that order, so `just apply-private` remains the normal complete and idempotent
+entry point.
+
+Mise manages Node.js 24.20.0, OMP 18.1.7, Kimi Code 0.40.1, and Paseo 0.7.2.
+The server therefore needs only `ca-certificates` as a mise bootstrap package;
+the harness role removes the superseded apt `nodejs` and `npm` packages and the
+old `/opt` installs after the replacement passes its checks. The committed
+`mise.lock` pins the downloadable OMP and Node artifacts by URL and checksum,
+while the two npm tools use exact package versions.
+
+Paseo runs as `dima`, starts at boot, exposes its web and mobile control plane
+only on the server's Tailscale IPv4 address, and requires its own password. The
+relay, public/wildcard binds, and unused local speech model downloads are
+disabled. OMP and Kimi Code are enabled as Paseo providers; OMP discovers
+Ollama Cloud models and Kimi uses the Kimi Coding endpoint with
+`kimi-for-coding` as its conservative default.
+
+`just apply-private` reads only `KIMI_API_KEY` and `OLLAMA_API_KEY` from
+`~/dotfiles/.env` and exports them to Ansible. Ansible task output and diffs are
+suppressed for every secret-bearing operation. The keys are installed only in
+mode-`0600` files owned by `dima`: the Ollama key in the private harness runtime
+environment and the Kimi key in Kimi Code's protected provider configuration.
+
+Paseo's separate 32-character password is generated once. Its controller copy
+lives in the ignored mode-`0600` file
+`ansible/inventories/private/group_vars/all/.paseo-password`; the server copy
+lives in `/home/dima/.config/private-harnesses/paseo.env`. To display it only
+in your current Termius session:
+
+```bash
+source ~/.config/private-harnesses/paseo.env
+printf '%s\n' "$PASEO_PASSWORD"
+```
+
+On Android, connect Tailscale first, then add a direct connection in Paseo with
+host `private:6767`, TLS/SSL off, and that password. Tailscale encrypts the
+otherwise-HTTP connection. The same endpoint's browser UI is available at
+`http://private:6767`. Standalone `omp`, `kimi`, and `paseo` commands are
+system-path wrappers around the locked mise environment and are available over
+the existing OpenSSH/Termius login.
 
 ## Production secrets
 
@@ -153,6 +218,11 @@ readable only by root and the corresponding service group. Syncthing's API key
 and password hash instead live in its mode-`0600` generated state. Routine
 application deployments replace code without receiving the Vault password or
 rewriting these files.
+
+Private harness API keys are intentionally not added to Ansible Vault or Git.
+They remain in `~/dotfiles/.env` on the controller and are injected during
+`just apply-private`; the generated Paseo password is kept in the ignored local
+inventory file described above.
 
 The current site playbook maintains SSH hardening, upgrades the base Ubuntu
 system, enables unattended security updates, configures persistent bounded

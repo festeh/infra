@@ -22,6 +22,12 @@ allowed_public_listeners:
   - protocol: tcp
     address_cidr: fd7a:115c:a1e0::/48
     process: tailscaled
+  # Paseo binds only to this node's Tailscale IPv4 address. Its own password
+  # protects the agent control plane inside the encrypted tailnet.
+  - protocol: tcp
+    port: 6767
+    address_cidr: 100.64.0.0/10
+    process: Paseo Daemon
   - protocol: udp
     port: 68
     process: systemd-network

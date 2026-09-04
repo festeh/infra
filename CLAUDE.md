@@ -20,9 +20,12 @@ recipes.
   expire; nothing else about that service is manual.
 - `just apply` repeatedly converges and verifies only the public service host.
 - `just apply-private` repeatedly converges and verifies the private host,
-  including Tailscale. Its first run requires a one-off or restricted auth key
-  in the controller's `TAILSCALE_AUTH_KEY` environment variable; later runs use
-  the node's persistent identity and need no key.
+  including Tailscale, checksum-pinned mise, its locked OMP/Kimi/Paseo
+  toolchain, and the Tailscale-only Paseo service. It loads only `KIMI_API_KEY`
+  and `OLLAMA_API_KEY` from `~/dotfiles/.env`. Its first run requires a one-off
+  or restricted Tailscale auth key in the controller's `TAILSCALE_AUTH_KEY`
+  environment variable; later runs use the node's persistent identity and need
+  no Tailscale key.
 - Additional Ansible flags pass through the same command, for example
   `just apply --check --diff` or `just apply --tags base`.
 
@@ -40,6 +43,13 @@ Syncthing were restored by 2026-07-19:
 - Public host: SSH alias `ionos`, inventory host `web_server`.
 - Operating system: Ubuntu 26.04 LTS.
 - Administration: key-based `dima` with non-interactive sudo.
+- The private server runs checksum-pinned mise 2026.9.1, which manages locked
+  Node.js 24.20.0, OMP 18.1.7, Kimi Code 0.40.1, and Paseo 0.7.2 releases.
+  Paseo is password-authenticated, binds only to its Tailscale IPv4 address on
+  TCP/6767, disables the relay and unused speech features, and exposes both OMP
+  and Kimi as available providers. Private API keys come only from the
+  controller environment and protected mode-`0600` server files; the generated
+  Paseo password has an ignored controller copy.
 - Timezone: `Europe/Berlin`; Chrony is active and synchronized.
 - Daily unattended security upgrades are active; automatic unattended reboots
   are disabled. An explicit `just apply` reboots when Ubuntu reports that an
@@ -179,8 +189,11 @@ dedicated PostgreSQL database.
 - `ansible/playbooks/shared/bootstrap-access.yml` and `base.yml` own the other
   shared provisioning phases.
 - `ansible/playbooks/private/site.yml` is the repeatable private entry point;
-  it applies the shared baseline and Tailscale only.
-- `ansible/roles/access` owns SSH hardening and root-password locking.
+  it applies the shared baseline and Tailscale, then imports the separate
+  `mise.yml` bootstrap and `harnesses.yml` tool/service playbooks.
+- `ansible/roles/access` owns SSH hardening, root-password locking, and
+  optional additional administrator keys supplied by ignored local inventory
+  variables.
 - `ansible/roles/base` owns packages, upgrades, time, journald, and reboot
   handling.
 - `ansible/roles/caddy` owns the official package repository, edge service,
@@ -215,6 +228,15 @@ dedicated PostgreSQL database.
   first-time enrollment, and online-state verification. Enrollment consumes a
   controller environment auth key through a temporary root-only file and never
   persists that key.
+- `ansible/roles/mise` owns the checksum-pinned mise binary, its sole apt
+  prerequisite (`ca-certificates`), and the private user's protected mise
+  directories.
+- `ansible/roles/private_harnesses` owns the committed locked mise declaration
+  for Node.js, OMP, Kimi Code, and Paseo; protected Kimi/Ollama credentials;
+  generated local-only Paseo password; mise-backed system-path wrappers; the
+  Tailscale-only/password-authenticated daemon; enabled OMP/Kimi providers;
+  disabled speech downloads; and runtime, model-catalogue, authentication, and
+  listener verification.
 - `ansible/roles/binary_release` implements the shared restricted deployment
   identity, checksum-addressed binary receiver, atomic activation/rollback,
   retention, exact-unit restart permission, and active-binary validation used
@@ -326,8 +348,9 @@ the VPS. Migrate only rotated server-side values into encrypted public
 variables; do not copy old application values into a new vault merely to
 preserve the previous deployment.
 
-Obsolete standalone playbooks, global templates, the duplicate inventory, and
-the mise configuration were deleted; use Git history when their previous logic
-needs to be inspected. New service configuration belongs only in roles included
-by `playbooks/public/site.yml`. `just` is the infrastructure task interface; do
-not reintroduce mise as the task runner.
+Obsolete standalone public-service playbooks, global templates, the duplicate
+inventory, and the former repository task-runner mise configuration were
+deleted; use Git history when their previous logic needs to be inspected. New
+public service configuration belongs only in roles included by
+`playbooks/public/site.yml`. Mise is a runtime manager only for the private
+server toolchain; `just` remains the infrastructure task interface.

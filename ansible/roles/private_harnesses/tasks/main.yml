@@ -1,0 +1,573 @@
+---
+- name: Load private harness secrets from controller-only sources
+  ansible.builtin.set_fact:
+    private_harnesses_secrets:
+      kimi_api_key: "{{ private_harnesses_kimi_api_key }}"
+      ollama_api_key: "{{ private_harnesses_ollama_api_key }}"
+      paseo_password: >-
+        {{ lookup(
+             'ansible.builtin.password',
+             private_harnesses_controller_paseo_password_file,
+             length=32,
+             chars=['ascii_letters', 'digits']
+           ) }}
+  no_log: true
+
+- name: Protect the controller-only Paseo password
+  ansible.builtin.file:
+    path: "{{ private_harnesses_controller_paseo_password_file }}"
+    state: file
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  no_log: true
+
+- name: Require a supported and complete private harness declaration
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['distribution'] == 'Ubuntu'
+      - ansible_facts['architecture'] == 'x86_64'
+      - private_harnesses_user == 'dima'
+      - private_harnesses_group == 'dima'
+      - private_harnesses_home == '/home/dima'
+      - private_harnesses_paseo_port | int == 6767
+      - private_harnesses_secrets.kimi_api_key | length >= 20
+      - private_harnesses_secrets.ollama_api_key | length >= 20
+      - private_harnesses_secrets.paseo_password | length == 32
+      - private_harnesses_secrets.kimi_api_key != private_harnesses_secrets.ollama_api_key
+      - private_harnesses_secrets.paseo_password != private_harnesses_secrets.kimi_api_key
+    fail_msg: >-
+      The private harness platform, pinned releases, or controller-provided
+      secrets are incomplete or invalid.
+    quiet: true
+  no_log: true
+
+- name: Read the active Tailscale state for the private bind address
+  ansible.builtin.command:
+    argv:
+      - tailscale
+      - status
+      - --json
+  register: private_harnesses_tailscale_status_result
+  check_mode: false
+  changed_when: false
+
+- name: Decode the private Tailscale addresses
+  ansible.builtin.set_fact:
+    private_harnesses_tailscale_status: >-
+      {{ private_harnesses_tailscale_status_result.stdout | from_json }}
+    private_harnesses_tailscale_ipv4: >-
+      {{ (private_harnesses_tailscale_status_result.stdout | from_json).TailscaleIPs
+         | select('match', '^[0-9]+[.]') | first }}
+    private_harnesses_tailscale_dns_name: >-
+      {{ (private_harnesses_tailscale_status_result.stdout | from_json).Self.DNSName
+         | regex_replace('[.]$', '') }}
+
+- name: Require an online private Tailscale address
+  ansible.builtin.assert:
+    that:
+      - private_harnesses_tailscale_status.BackendState == 'Running'
+      - private_harnesses_tailscale_status.Self.Online | bool
+      - private_harnesses_tailscale_ipv4 in private_harnesses_tailscale_status.TailscaleIPs
+      - private_harnesses_tailscale_ipv4.split('.') | length == 4
+      - private_harnesses_tailscale_ipv4.split('.')[0] | int == 100
+      - private_harnesses_tailscale_ipv4.split('.')[1] | int >= 64
+      - private_harnesses_tailscale_ipv4.split('.')[1] | int <= 127
+      - private_harnesses_tailscale_dns_name | length > 0
+    fail_msg: Paseo requires an online Tailscale IPv4 address before it can bind.
+    quiet: true
+
+- name: Inspect the mise bootstrap
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - "{{ private_harnesses_mise_binary }}"
+    - "{{ private_harnesses_mise_config_directory }}"
+    - "{{ private_harnesses_mise_data_directory }}"
+    - "{{ private_harnesses_mise_cache_directory }}"
+  register: private_harnesses_mise_bootstrap
+
+- name: Defer harness convergence when mise is absent during check mode
+  ansible.builtin.meta: end_role
+  when:
+    - ansible_check_mode
+    - >-
+      private_harnesses_mise_bootstrap.results
+      | selectattr('stat.exists', 'equalto', false) | list | length > 0
+
+- name: Require the separate mise bootstrap
+  ansible.builtin.assert:
+    that:
+      - >-
+        private_harnesses_mise_bootstrap.results
+        | selectattr('stat.exists', 'equalto', false) | list | length == 0
+      - private_harnesses_mise_bootstrap.results[0].stat.executable | default(false)
+      - private_harnesses_mise_bootstrap.results[1].stat.isdir | default(false)
+      - private_harnesses_mise_bootstrap.results[2].stat.isdir | default(false)
+      - private_harnesses_mise_bootstrap.results[3].stat.isdir | default(false)
+    fail_msg: Run playbooks/private/mise.yml before the private harness playbook.
+    quiet: true
+
+- name: Read the bootstrapped mise version
+  ansible.builtin.command:
+    argv:
+      - "{{ private_harnesses_mise_binary }}"
+      - --version
+  register: private_harnesses_mise_version_result
+  check_mode: false
+  changed_when: false
+
+- name: Require the harness-compatible mise version
+  ansible.builtin.assert:
+    that:
+      - private_harnesses_mise_version in private_harnesses_mise_version_result.stdout
+    fail_msg: The private harness playbook requires the pinned mise bootstrap.
+    quiet: true
+
+- name: Inspect mise-managed harness installations before convergence
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - >-
+      {{ private_harnesses_mise_data_directory }}/installs/github-can1357-oh-my-pi/{{ private_harnesses_omp_version }}/omp
+    - >-
+      {{ private_harnesses_mise_data_directory }}/installs/npm-moonshot-ai-kimi-code/{{ private_harnesses_kimi_version }}/node_modules/.bin/kimi
+    - >-
+      {{ private_harnesses_mise_data_directory }}/installs/npm-getpaseo-cli/{{ private_harnesses_paseo_version }}/node_modules/.bin/paseo
+  register: private_harnesses_installations_before_apply
+
+- name: Defer first-time private harness installation during check mode
+  ansible.builtin.meta: end_role
+  when:
+    - ansible_check_mode
+    - >-
+      private_harnesses_installations_before_apply.results
+      | selectattr('stat.exists', 'equalto', false) | list | length > 0
+
+- name: Install the pinned private mise declaration
+  ansible.builtin.copy:
+    src: mise.toml
+    dest: "{{ private_harnesses_mise_config }}"
+    owner: "{{ private_harnesses_user }}"
+    group: "{{ private_harnesses_group }}"
+    mode: "0600"
+  notify: Restart Paseo
+
+- name: Install the private mise artifact lock
+  ansible.builtin.copy:
+    src: mise.lock
+    dest: "{{ private_harnesses_mise_lock }}"
+    owner: "{{ private_harnesses_user }}"
+    group: "{{ private_harnesses_group }}"
+    mode: "0600"
+  notify: Restart Paseo
+
+- name: Inspect the locked private mise install plan
+  ansible.builtin.command:
+    argv:
+      - "{{ private_harnesses_mise_binary }}"
+      - -C
+      - "{{ private_harnesses_mise_config_directory }}"
+      - install
+      - --locked
+      - --dry-run-code
+  become_user: "{{ private_harnesses_user }}"
+  environment: "{{ private_harnesses_mise_environment }}"
+  register: private_harnesses_mise_install_plan
+  check_mode: false
+  changed_when: false
+  failed_when: private_harnesses_mise_install_plan.rc not in [0, 1]
+
+- name: Install the locked private harness toolchain with mise
+  ansible.builtin.command:
+    argv:
+      - "{{ private_harnesses_mise_binary }}"
+      - -C
+      - "{{ private_harnesses_mise_config_directory }}"
+      - install
+      - --locked
+      - --yes
+  become_user: "{{ private_harnesses_user }}"
+  environment: "{{ private_harnesses_mise_environment }}"
+  when:
+    - not ansible_check_mode
+    - private_harnesses_mise_install_plan.rc == 1
+  changed_when: true
+  notify: Restart Paseo
+
+- name: Remove distro Node.js now owned by mise
+  ansible.builtin.apt:
+    name:
+      - nodejs
+      - npm
+    state: absent
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+    NEEDRESTART_MODE: a
+
+- name: Inspect the legacy Paseo command link
+  ansible.builtin.stat:
+    path: "{{ private_harnesses_paseo_binary }}"
+    follow: false
+  register: private_harnesses_legacy_paseo_link
+
+- name: Remove the legacy Paseo command link
+  ansible.builtin.file:
+    path: "{{ private_harnesses_paseo_binary }}"
+    state: absent
+  when: private_harnesses_legacy_paseo_link.stat.islnk | default(false)
+
+- name: Create protected private harness state directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ private_harnesses_user }}"
+    group: "{{ private_harnesses_group }}"
+    mode: "0700"
+  loop:
+    - "{{ private_harnesses_secret_directory }}"
+    - "{{ private_harnesses_kimi_home }}"
+    - "{{ private_harnesses_paseo_home }}"
+
+- name: Install the protected Paseo authentication environment
+  ansible.builtin.copy:
+    content: |
+      PASEO_PASSWORD={{ private_harnesses_secrets.paseo_password | to_json }}
+    dest: "{{ private_harnesses_paseo_environment_file }}"
+    owner: "{{ private_harnesses_user }}"
+    group: "{{ private_harnesses_group }}"
+    mode: "0600"
+  diff: false
+  no_log: true
+  notify: Restart Paseo
+
+- name: Install the protected OMP provider environment
+  ansible.builtin.copy:
+    content: |
+      OLLAMA_API_KEY={{ private_harnesses_secrets.ollama_api_key | to_json }}
+      OLLAMA_BASE_URL={{ private_harnesses_ollama_base_url | to_json }}
+    dest: "{{ private_harnesses_omp_environment_file }}"
+    owner: "{{ private_harnesses_user }}"
+    group: "{{ private_harnesses_group }}"
+    mode: "0600"
+  diff: false
+  no_log: true
+  notify: Restart Paseo
+
+- name: Remove the superseded combined harness environment
+  ansible.builtin.file:
+    path: "{{ private_harnesses_legacy_environment_file }}"
+    state: absent
+
+- name: Install the protected Kimi Code configuration
+  ansible.builtin.template:
+    src: kimi-config.toml.j2
+    dest: "{{ private_harnesses_kimi_config }}"
+    owner: "{{ private_harnesses_user }}"
+    group: "{{ private_harnesses_group }}"
+    mode: "0600"
+  diff: false
+  no_log: true
+  notify: Restart Paseo
+
+- name: Install the secret-loading OMP command wrapper
+  ansible.builtin.template:
+    src: omp-wrapper.sh.j2
+    dest: "{{ private_harnesses_omp_binary }}"
+    owner: root
+    group: root
+    mode: "0755"
+  notify: Restart Paseo
+
+- name: Install the update-pinned Kimi Code command wrapper
+  ansible.builtin.template:
+    src: kimi-wrapper.sh.j2
+    dest: "{{ private_harnesses_kimi_binary }}"
+    owner: root
+    group: root
+    mode: "0755"
+  notify: Restart Paseo
+
+- name: Install the mise-backed Paseo command wrapper
+  ansible.builtin.template:
+    src: paseo-wrapper.sh.j2
+    dest: "{{ private_harnesses_paseo_binary }}"
+    owner: root
+    group: root
+    mode: "0755"
+  notify: Restart Paseo
+
+- name: Install the Tailscale-only Paseo configuration
+  ansible.builtin.template:
+    src: paseo-config.json.j2
+    dest: "{{ private_harnesses_paseo_home }}/config.json"
+    owner: "{{ private_harnesses_user }}"
+    group: "{{ private_harnesses_group }}"
+    mode: "0600"
+  notify: Restart Paseo
+
+- name: Install the hardened Paseo system service
+  ansible.builtin.template:
+    src: paseo.service.j2
+    dest: "/etc/systemd/system/{{ private_harnesses_paseo_service }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart Paseo
+
+- name: Enable and start Paseo
+  ansible.builtin.systemd_service:
+    name: "{{ private_harnesses_paseo_service }}"
+    daemon_reload: true
+    enabled: true
+    state: started
+
+- name: Apply private harness service changes before verification
+  ansible.builtin.meta: flush_handlers
+
+- name: Remove the disabled local speech model cache
+  ansible.builtin.file:
+    path: "{{ private_harnesses_paseo_home }}/models/local-speech"
+    state: absent
+
+- name: Resolve every private runtime through mise
+  ansible.builtin.command:
+    argv:
+      - "{{ private_harnesses_mise_binary }}"
+      - -C
+      - "{{ private_harnesses_mise_config_directory }}"
+      - which
+      - "{{ item }}"
+  become_user: "{{ private_harnesses_user }}"
+  environment: "{{ private_harnesses_mise_environment }}"
+  loop:
+    - node
+    - omp
+    - kimi
+    - paseo
+  register: private_harnesses_mise_paths
+  check_mode: false
+  changed_when: false
+
+- name: Require every private runtime to come from the mise data tree
+  ansible.builtin.assert:
+    that:
+      - >-
+        item.stdout.startswith(private_harnesses_mise_data_directory ~ '/installs/')
+    fail_msg: "{{ item.item }} did not resolve to its mise-managed installation."
+    quiet: true
+  loop: "{{ private_harnesses_mise_paths.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Read the mise-managed Node.js version
+  ansible.builtin.command:
+    argv:
+      - "{{ private_harnesses_mise_binary }}"
+      - -C
+      - "{{ private_harnesses_mise_config_directory }}"
+      - exec
+      - --
+      - node
+      - --version
+  become_user: "{{ private_harnesses_user }}"
+  environment: "{{ private_harnesses_mise_environment }}"
+  register: private_harnesses_node_version_result
+  check_mode: false
+  changed_when: false
+
+- name: Require the pinned Node.js version
+  ansible.builtin.assert:
+    that:
+      - private_harnesses_node_version in private_harnesses_node_version_result.stdout
+    fail_msg: Node.js did not report its mise-pinned version.
+    quiet: true
+
+- name: Read private harness versions
+  ansible.builtin.command:
+    argv:
+      - "{{ item.binary }}"
+      - --version
+  become_user: "{{ private_harnesses_user }}"
+  environment:
+    HOME: "{{ private_harnesses_home }}"
+  loop:
+    - name: OMP
+      binary: "{{ private_harnesses_omp_binary }}"
+      version: "{{ private_harnesses_omp_version }}"
+    - name: Kimi Code
+      binary: "{{ private_harnesses_kimi_binary }}"
+      version: "{{ private_harnesses_kimi_version }}"
+    - name: Paseo
+      binary: "{{ private_harnesses_paseo_binary }}"
+      version: "{{ private_harnesses_paseo_version }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: private_harnesses_version_results
+  check_mode: false
+  changed_when: false
+
+- name: Require the pinned private harness versions
+  ansible.builtin.assert:
+    that:
+      - item.item.version in item.stdout
+    fail_msg: "{{ item.item.name }} did not report its pinned version."
+    quiet: true
+  loop: "{{ private_harnesses_version_results.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+
+- name: Validate the protected Kimi Code configuration
+  ansible.builtin.command:
+    argv:
+      - "{{ private_harnesses_kimi_binary }}"
+      - doctor
+      - config
+  become_user: "{{ private_harnesses_user }}"
+  environment:
+    HOME: "{{ private_harnesses_home }}"
+  check_mode: false
+  changed_when: false
+  no_log: true
+
+- name: Wait for the Tailscale-only Paseo health endpoint
+  ansible.builtin.uri:
+    url: >-
+      http://{{ private_harnesses_tailscale_ipv4 }}:{{ private_harnesses_paseo_port }}/api/health
+    method: GET
+    status_code: 200
+    return_content: false
+  register: private_harnesses_paseo_health
+  retries: 15
+  delay: 2
+  until: private_harnesses_paseo_health.status == 200
+
+- name: Require password authentication on the Paseo API
+  ansible.builtin.uri:
+    url: >-
+      http://{{ private_harnesses_tailscale_ipv4 }}:{{ private_harnesses_paseo_port }}/api/workspaces
+    method: GET
+    status_code: 401
+    return_content: false
+
+- name: Verify the password-authenticated Paseo CLI connection
+  ansible.builtin.command:
+    argv:
+      - "{{ private_harnesses_paseo_binary }}"
+      - ls
+      - --host
+      - "{{ private_harnesses_tailscale_ipv4 }}:{{ private_harnesses_paseo_port }}"
+      - --json
+  become_user: "{{ private_harnesses_user }}"
+  environment:
+    HOME: "{{ private_harnesses_home }}"
+    PASEO_PASSWORD: "{{ private_harnesses_secrets.paseo_password }}"
+  register: private_harnesses_paseo_cli_check
+  check_mode: false
+  changed_when: false
+  no_log: true
+
+- name: Read the Paseo harness provider catalogue
+  ansible.builtin.command:
+    argv:
+      - "{{ private_harnesses_paseo_binary }}"
+      - provider
+      - ls
+      - --host
+      - "{{ private_harnesses_tailscale_ipv4 }}:{{ private_harnesses_paseo_port }}"
+      - --json
+  become_user: "{{ private_harnesses_user }}"
+  environment:
+    HOME: "{{ private_harnesses_home }}"
+    PASEO_PASSWORD: "{{ private_harnesses_secrets.paseo_password }}"
+  register: private_harnesses_paseo_providers_result
+  check_mode: false
+  changed_when: false
+  no_log: true
+  retries: 10
+  delay: 2
+  until: >-
+    (private_harnesses_paseo_providers_result.stdout | default('[]') | from_json
+     | selectattr('provider', 'equalto', 'omp')
+     | selectattr('status', 'equalto', 'available') | list | length == 1) and
+    (private_harnesses_paseo_providers_result.stdout | default('[]') | from_json
+     | selectattr('provider', 'equalto', 'kimi')
+     | selectattr('status', 'equalto', 'available') | list | length == 1)
+
+- name: Decode the Paseo harness provider catalogue
+  ansible.builtin.set_fact:
+    private_harnesses_paseo_provider_statuses: >-
+      {{ private_harnesses_paseo_providers_result.stdout | from_json
+         | items2dict(key_name='provider', value_name='status') }}
+  no_log: true
+
+- name: Require OMP and Kimi Code to be available through Paseo
+  ansible.builtin.assert:
+    that:
+      - private_harnesses_paseo_provider_statuses.omp == 'available'
+      - private_harnesses_paseo_provider_statuses.kimi == 'available'
+    fail_msg: Paseo did not discover both managed coding harnesses.
+    quiet: true
+
+- name: Discover managed harness models through Paseo
+  ansible.builtin.command:
+    argv:
+      - "{{ private_harnesses_paseo_binary }}"
+      - provider
+      - models
+      - "{{ item }}"
+      - --host
+      - "{{ private_harnesses_tailscale_ipv4 }}:{{ private_harnesses_paseo_port }}"
+      - --json
+  become_user: "{{ private_harnesses_user }}"
+  environment:
+    HOME: "{{ private_harnesses_home }}"
+    PASEO_PASSWORD: "{{ private_harnesses_secrets.paseo_password }}"
+  loop:
+    - omp
+    - kimi
+  register: private_harnesses_paseo_models_results
+  check_mode: false
+  changed_when: false
+  no_log: true
+
+- name: Require Ollama Cloud and Kimi Coding model discovery
+  ansible.builtin.assert:
+    that:
+      - >-
+        private_harnesses_paseo_models_results.results[0].stdout | from_json
+        | map(attribute='id') | select('match', '^ollama/') | list | length > 0
+      - >-
+        private_harnesses_kimi_default_model in
+        (private_harnesses_paseo_models_results.results[1].stdout | from_json
+         | map(attribute='id') | list)
+    fail_msg: The managed API credentials did not expose their expected model catalogues.
+    quiet: true
+  no_log: true
+
+- name: Inspect the Paseo network listener
+  ansible.builtin.command:
+    argv:
+      - ss
+      - -H
+      - -lntp
+      - "sport = :{{ private_harnesses_paseo_port }}"
+  register: private_harnesses_paseo_listener
+  check_mode: false
+  changed_when: false
+
+- name: Require Paseo to listen only on the Tailscale address
+  ansible.builtin.assert:
+    that:
+      - private_harnesses_tailscale_ipv4 in private_harnesses_paseo_listener.stdout
+      - "'0.0.0.0:' ~ private_harnesses_paseo_port not in private_harnesses_paseo_listener.stdout"
+      - "'[::]:' ~ private_harnesses_paseo_port not in private_harnesses_paseo_listener.stdout"
+      - "'Paseo Daemon' in private_harnesses_paseo_listener.stdout"
+    fail_msg: Paseo is not restricted to its reviewed Tailscale listener.
+    quiet: true
+
+- name: Remove superseded harness installations
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ private_harnesses_legacy_install_roots }}"

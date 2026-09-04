@@ -1,0 +1,67 @@
+---
+- name: Require a supported mise bootstrap declaration
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['distribution'] == 'Ubuntu'
+      - ansible_facts['architecture'] == 'x86_64'
+      - mise_user == 'dima'
+      - mise_group == 'dima'
+      - mise_home == '/home/dima'
+      - mise_checksum is match('^sha256:[0-9a-f]{64}$')
+    fail_msg: The mise platform, release, or target account is invalid.
+    quiet: true
+
+- name: Install mise bootstrap prerequisites
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+    NEEDRESTART_MODE: a
+
+- name: Create private mise directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ mise_user }}"
+    group: "{{ mise_group }}"
+    mode: "0700"
+  loop:
+    - "{{ mise_config_directory }}"
+    - "{{ mise_data_directory }}"
+    - "{{ mise_cache_directory }}"
+
+- name: Install the checksum-pinned mise binary
+  ansible.builtin.get_url:
+    url: "{{ mise_url }}"
+    dest: "{{ mise_binary }}"
+    checksum: "{{ mise_checksum }}"
+    owner: root
+    group: root
+    mode: "0755"
+  register: mise_binary_install
+
+- name: Defer the mise version probe for a predicted check-mode install
+  ansible.builtin.meta: end_role
+  when:
+    - ansible_check_mode
+    - mise_binary_install.changed
+
+- name: Read the installed mise version
+  ansible.builtin.command:
+    argv:
+      - "{{ mise_binary }}"
+      - --version
+  register: mise_version_result
+  check_mode: false
+  changed_when: false
+
+- name: Require the pinned mise version
+  ansible.builtin.assert:
+    that:
+      - mise_version in mise_version_result.stdout
+    fail_msg: mise did not report its pinned version.
+    quiet: true

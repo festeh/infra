@@ -102,4 +102,35 @@ apply *ansible_args:
 
 # Converge the private server, including Tailscale, and run all safety checks.
 apply-private *ansible_args:
-    cd "{{ ansible_dir }}" && ansible-playbook -i "{{ private_inventory }}" playbooks/private/site.yml {{ ansible_args }}
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    dotfiles_env="$HOME/dotfiles/.env"
+    if [[ ! -r "$dotfiles_env" ]]; then
+      echo "Private apply requires a readable $dotfiles_env" >&2
+      exit 1
+    fi
+
+    load_private_harness_secret() {
+      local variable_name="$1"
+      (
+        set +u
+        source "$dotfiles_env"
+        value="${!variable_name:-}"
+        [[ -n "$value" ]] || exit 1
+        printf %s "$value"
+      )
+    }
+
+    if ! KIMI_API_KEY="$(load_private_harness_secret KIMI_API_KEY)"; then
+      echo "KIMI_API_KEY is missing from $dotfiles_env" >&2
+      exit 1
+    fi
+    if ! OLLAMA_API_KEY="$(load_private_harness_secret OLLAMA_API_KEY)"; then
+      echo "OLLAMA_API_KEY is missing from $dotfiles_env" >&2
+      exit 1
+    fi
+    export KIMI_API_KEY OLLAMA_API_KEY
+
+    cd "{{ ansible_dir }}"
+    ansible-playbook -i "{{ private_inventory }}" playbooks/private/site.yml {{ ansible_args }}

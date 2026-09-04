@@ -1,0 +1,9 @@
+[settings]
+lockfile = true
+locked = true
+
+[tools]
+node = "24.20.0"
+"github:can1357/oh-my-pi" = "18.1.7"
+"npm:@moonshot-ai/kimi-code" = "0.40.1"
+"npm:@getpaseo/cli" = "0.7.2"

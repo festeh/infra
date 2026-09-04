@@ -1,0 +1,15 @@
+---
+mise_user: dima
+mise_group: dima
+mise_home: /home/dima
+
+mise_version: 2026.9.1
+mise_url: >-
+  https://github.com/jdx/mise/releases/download/v{{ mise_version }}/mise-v{{ mise_version }}-linux-x64
+mise_checksum: >-
+  sha256:c98423c8470d6dc416d9f7036d0646d8ef5ae92ad9186907f8fcc84cbe7db4ea
+mise_binary: /usr/local/bin/mise
+
+mise_config_directory: "{{ mise_home }}/.config/mise"
+mise_data_directory: "{{ mise_home }}/.local/share/mise"
+mise_cache_directory: "{{ mise_home }}/.cache/mise"

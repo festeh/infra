@@ -1,0 +1,51 @@
+[Unit]
+Description=Paseo private coding-agent control plane
+Documentation=https://paseo.sh/docs
+Wants=network-online.target tailscaled.service
+After=network-online.target tailscaled.service
+
+[Service]
+Type=simple
+User={{ private_harnesses_user }}
+Group={{ private_harnesses_group }}
+WorkingDirectory={{ private_harnesses_home }}
+Environment=HOME={{ private_harnesses_home }}
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=PASEO_HOME={{ private_harnesses_paseo_home }}
+EnvironmentFile={{ private_harnesses_paseo_environment_file }}
+ExecStart={{ private_harnesses_paseo_binary }} daemon start --foreground
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+UMask=0077
+TasksMax=4096
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=paseo
+
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=false
+ProtectHostname=true
+ProtectClock=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectProc=invisible
+ProcSubset=pid
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RemoveIPC=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths={{ private_harnesses_home }}
+
+[Install]
+WantedBy=multi-user.target

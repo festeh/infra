@@ -1,0 +1,16 @@
+default_model = {{ private_harnesses_kimi_default_model | to_json }}
+default_permission_mode = "manual"
+
+[providers.kimi-coding]
+type = "kimi"
+base_url = {{ private_harnesses_kimi_base_url | to_json }}
+
+[providers.kimi-coding.env]
+KIMI_API_KEY = {{ private_harnesses_secrets.kimi_api_key | to_json }}
+
+[models.kimi-for-coding]
+provider = "kimi-coding"
+model = "kimi-for-coding"
+display_name = "Kimi for Coding"
+max_context_size = 262144
+capabilities = ["thinking", "image_in", "video_in", "tool_use"]
