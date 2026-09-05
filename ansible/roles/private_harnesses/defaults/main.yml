@@ -31,7 +31,7 @@ private_harnesses_omp_binary: /usr/local/bin/omp
 private_harnesses_kimi_version: 0.40.1
 private_harnesses_kimi_binary: /usr/local/bin/kimi
 private_harnesses_kimi_base_url: https://api.kimi.com/coding/v1
-private_harnesses_kimi_default_model: kimi-for-coding
+private_harnesses_kimi_default_model: k3
 
 private_harnesses_node_version: 24.20.0
 private_harnesses_paseo_version: 0.7.2

@@ -175,8 +175,10 @@ Paseo runs as `dima`, starts at boot, exposes its web and mobile control plane
 only on the server's Tailscale IPv4 address, and requires its own password. The
 relay, public/wildcard binds, and unused local speech model downloads are
 disabled. OMP and Kimi Code are enabled as Paseo providers; OMP discovers
-Ollama Cloud models and Kimi uses the Kimi Coding endpoint with
-`kimi-for-coding` as its conservative default.
+Ollama Cloud models and Kimi uses the Kimi Coding endpoint with K3 (model ID
+`k3`) as its default, a 1M-token context window, and `max` reasoning effort.
+`kimi-for-coding` remains available in the model selector. The Kimi Coding API
+key must belong to an account with access to K3 and the 1M context window.
 
 `just apply-private` reads only `KIMI_API_KEY` and `OLLAMA_API_KEY` from
 `~/dotfiles/.env` and exports them to Ansible. Ansible task output and diffs are
