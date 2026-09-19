@@ -14,7 +14,7 @@ WorkingDirectory={{ private_harnesses_home }}
 Environment=HOME={{ private_harnesses_home }}
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 Environment=T3CODE_HOME={{ private_harnesses_home }}/.t3
-ExecStart=/usr/local/bin/t3 serve --host {{ private_harnesses_tailscale_ipv4 }} --port {{ private_harnesses_t3_port }} --no-browser
+ExecStart={{ private_harnesses_t3_binary }} serve --host {{ private_harnesses_tailscale_ipv4 }} --port {{ private_harnesses_t3_port }} --no-browser
 Restart=on-failure
 RestartSec=5s
 TimeoutStopSec=30s

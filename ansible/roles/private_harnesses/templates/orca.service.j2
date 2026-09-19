@@ -17,7 +17,7 @@ Environment=LIBGL_ALWAYS_SOFTWARE=1
 # Orca's upstream listener is wildcard-only. pasta contains it in a private
 # network namespace and forwards exactly one TCP port on the tailnet address.
 # Explicit 'none' values disable pasta's automatic port forwarding in both directions.
-ExecStart=/usr/bin/pasta -f --config-net -4 --no-map-gw --dns-forward 169.254.1.1 --dns-host 127.0.0.53 -t {{ private_harnesses_tailscale_ipv4 }}/{{ private_harnesses_orca_port }} -u none -T none -U none -- /usr/bin/setpriv --no-new-privs /bin/bash /usr/local/bin/orca serve --port {{ private_harnesses_orca_port }} --pairing-address {{ private_harnesses_tailscale_ipv4 }} --mobile-pairing --json
+ExecStart=/usr/bin/pasta -f --config-net -4 --no-map-gw --dns-forward 169.254.1.1 --dns-host 127.0.0.53 -t {{ private_harnesses_tailscale_ipv4 }}/{{ private_harnesses_orca_port }} -u none -T none -U none -- /usr/bin/setpriv --no-new-privs /bin/bash {{ private_harnesses_orca_binary }} serve --port {{ private_harnesses_orca_port }} --pairing-address {{ private_harnesses_tailscale_ipv4 }} --mobile-pairing --json
 BindReadOnlyPaths={{ private_harnesses_secret_directory }}/orca-resolv.conf:/etc/resolv.conf
 KillMode=mixed
 Restart=on-failure

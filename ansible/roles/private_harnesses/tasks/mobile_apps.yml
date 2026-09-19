@@ -108,7 +108,7 @@
 - name: Verify Orca runtime readiness
   ansible.builtin.command:
     argv:
-      - /usr/local/bin/orca
+      - "{{ private_harnesses_orca_binary }}"
       - status
       - --json
   become_user: "{{ private_harnesses_user }}"

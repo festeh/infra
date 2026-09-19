@@ -260,43 +260,6 @@
   changed_when: true
   notify: Restart private apps
 
-- name: Check T3 Code's native terminal module
-  ansible.builtin.command:
-    argv:
-      - "{{ private_harnesses_mise_binary }}"
-      - -C
-      - "{{ private_harnesses_mise_config_directory }}"
-      - exec
-      - --
-      - node
-      - -e
-      - require('node:module').createRequire(require('node:fs').realpathSync(process.argv[1]))('node-pty')
-      - "{{ private_harnesses_mise_data_directory }}/installs/npm-t3/{{ private_harnesses_t3_version }}/node_modules/t3/package.json"
-  become_user: "{{ private_harnesses_user }}"
-  environment: "{{ private_harnesses_mise_environment }}"
-  register: private_harnesses_t3_pty
-  changed_when: false
-  failed_when: private_harnesses_t3_pty.rc not in [0, 1]
-  when: not ansible_check_mode
-
-- name: Repair a T3 Code installation missing its native terminal module
-  ansible.builtin.command:
-    argv:
-      - "{{ private_harnesses_mise_binary }}"
-      - -C
-      - "{{ private_harnesses_mise_config_directory }}"
-      - install
-      - --locked
-      - --force
-      - npm:t3
-  become_user: "{{ private_harnesses_user }}"
-  environment: "{{ private_harnesses_mise_environment }}"
-  when:
-    - not ansible_check_mode
-    - private_harnesses_t3_pty.rc != 0
-  changed_when: true
-  notify: Restart T3 Code
-
 - name: Check the Orca AppImage postinstall result
   ansible.builtin.stat:
     path: >-
@@ -564,10 +527,10 @@
       binary: "{{ private_harnesses_paseo_binary }}"
       version: "{{ private_harnesses_paseo_version }}"
     - name: T3 Code
-      binary: /usr/local/bin/t3
+      binary: "{{ private_harnesses_t3_binary }}"
       version: "{{ private_harnesses_t3_version }}"
     - name: Orca
-      binary: /usr/local/bin/orca
+      binary: "{{ private_harnesses_orca_binary }}"
       version: "{{ private_harnesses_orca_version }}"
   loop_control:
     label: "{{ item.name }}"

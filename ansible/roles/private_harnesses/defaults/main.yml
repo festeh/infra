@@ -42,8 +42,10 @@ private_harnesses_paseo_home: "{{ private_harnesses_home }}/.paseo"
 private_harnesses_paseo_port: 6767
 private_harnesses_paseo_service: paseo.service
 private_harnesses_t3_version: "{{ private_harnesses_versions['npm:t3'] }}"
+private_harnesses_t3_binary: /usr/local/bin/t3
 private_harnesses_t3_port: 3773
 private_harnesses_orca_version: "{{ private_harnesses_versions['github:stablyai/orca'] }}"
+private_harnesses_orca_binary: /usr/local/bin/orca
 private_harnesses_orca_port: 6768
 private_harnesses_controller_paseo_password_file: >-
   {{ inventory_dir }}/group_vars/all/.paseo-password
