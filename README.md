@@ -251,9 +251,12 @@ wrapper that loads `OLLAMA_API_KEY` from the mode-`0600`
 against `@ai-sdk/openai-compatible`. The configuration names the key through
 `{env:OLLAMA_API_KEY}` rather than carrying it, so T3 can start OpenCode
 sessions without a login of its own and nothing but the wrapper sees the value.
-Sessions default to `kimi-k2.7-code` with `gpt-oss:20b` for small jobs; change
-`private_harnesses_opencode_model` or the reviewed
-`private_harnesses_opencode_models` list to offer others. `opencode models`
+Which models are offered follows the Artificial Analysis Intelligence Index:
+the declared list is every model on that subscription scoring 30 or better,
+and sessions default to the top of it, GLM 5.3. Small jobs such as titling a
+session go to DeepSeek V4.1 Flash, the quickest of the declared set at 208
+tokens a second and still scoring 40. Re-read the index and edit
+`private_harnesses_opencode_models` when the catalogue moves. `opencode models`
 shows what is actually selectable, which includes catalog entries beyond the
 declared list. Nothing goes through `ai.dimalip.in`: this path talks to Ollama
 directly.
