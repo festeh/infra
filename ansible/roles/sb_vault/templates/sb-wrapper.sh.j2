@@ -1,0 +1,9 @@
+#!/bin/bash
+# The sync server and its bearer token live in a file only dima can read,
+# rather than in the environment of every agent Paseo starts.
+set -o errexit -o nounset
+set -o allexport
+. {{ sb_vault_environment_file | quote }}
+set +o allexport
+export SB_VAULT="${SB_VAULT:-{{ sb_vault_directory }}}"
+exec {{ sb_vault_binary_path | quote }} "$@"

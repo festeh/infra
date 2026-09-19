@@ -164,12 +164,32 @@ the committed, locked tool declaration. The main private site imports both in
 that order, so `just apply-private` remains the normal complete and idempotent
 entry point.
 
-Mise manages Node.js 24.20.0, OMP 18.1.7, Kimi Code 0.40.1, and Paseo 0.7.2.
-The server therefore needs only `ca-certificates` as a mise bootstrap package;
-the harness role removes the superseded apt `nodejs` and `npm` packages and the
-old `/opt` installs after the replacement passes its checks. The committed
-`mise.lock` pins the downloadable OMP and Node artifacts by URL and checksum,
-while the two npm tools use exact package versions.
+Mise manages Node.js 24.20.0 and five apps: OMP, Kimi Code, Paseo, T3 Code
+(`npm:t3`), and Orca (`github:stablyai/orca`). Their exact versions live in
+`ansible/roles/private_harnesses/files/mise.lock`; normal applies reproduce that
+lock. Node remains pinned; the apps use `latest` selectors.
+
+To refresh all five apps to their newest stable releases and deploy them:
+
+```bash
+just apply-private --tags private_harnesses -e private_harnesses_upgrade=true
+```
+
+This resolves fresh version lists, writes the updated lockfile back into this
+checkout, installs it on the VPS, and restarts Paseo, T3 Code, and Orca when
+the toolchain changes. Run it between active sessions. Review and commit the
+updated lockfile afterward. `--check` reports the requested refresh without
+changing the lockfile or installing anything. The mise declaration sets
+`minimum_release_age = "0s"`, including npm dependencies, so newly published
+stable releases are eligible immediately. It does not select prereleases.
+
+The bootstrap needs only `ca-certificates`. The harness role supplies Orca's
+Xvfb/Electron libraries and `passt`, plus the compiler dependencies for T3's
+native terminal module. It removes the superseded distro Node/npm packages.
+T3 explicitly permits the `node-pty` build scripts. Its exact-version
+`@pierre/theme@1.1.0` provenance exception was reviewed: the integrity-verified
+package contains static theme exports and no install scripts or dependencies.
+Other dependencies retain mise's default trust policy.
 
 Paseo runs as `dima`, starts at boot, exposes its web and mobile control plane
 only on the server's Tailscale IPv4 address, and requires its own password. The
@@ -200,9 +220,81 @@ printf '%s\n' "$PASEO_PASSWORD"
 On Android, connect Tailscale first, then add a direct connection in Paseo with
 host `private:6767`, TLS/SSL off, and that password. Tailscale encrypts the
 otherwise-HTTP connection. The same endpoint's browser UI is available at
-`http://private:6767`. Standalone `omp`, `kimi`, and `paseo` commands are
-system-path wrappers around the locked mise environment and are available over
-the existing OpenSSH/Termius login.
+`http://private:6767`. Standalone `omp`, `kimi`, `paseo`, `t3`, and `orca`
+commands are system-path wrappers around the locked mise environment and are
+available over the existing OpenSSH/Termius login.
+
+T3 Code runs as `dima` in `t3code.service`, starts at boot, and serves
+`http://private:3773` on the Tailscale IPv4 address. Connect the phone to
+Tailscale, install the [official Android app](https://play.google.com/store/apps/details?id=com.t3tools.t3code),
+then open **Settings → Environments → Add environment** and paste a fresh
+pairing URL. Generate one in Termius with:
+
+```bash
+t3 pair --ttl 1h --label mobile
+```
+
+Each link is one-use and expires after one hour; an already paired device can
+reconnect without it. The direct URL also works in a browser. The hosted
+`app.t3.codes` client requires HTTPS and is not the endpoint used here. T3
+requires a supported, authenticated provider CLI before starting agent work;
+Kimi Code and OMP are not direct T3 providers. See the
+[upstream provider setup](https://github.com/pingdotgg/t3code/blob/main/docs/user/install.md#providers).
+
+Orca is the [onorca.dev / stablyai app](https://www.onorca.dev/), running as
+`dima` in `orca.service`. Install its [Android companion](https://www.onorca.dev/docs/android-apk),
+connect Tailscale, choose **Pair**, and paste the mobile pairing URL from the
+**Orca** Bitwarden note. Its advertised endpoint is `ws://private:6768`;
+pairing links carry the concrete Tailscale IP. Relay is not configured.
+
+Upstream Orca binds its server to all interfaces. The unit runs it inside a
+private network namespace using `pasta`, which forwards only Tailscale
+IPv4 TCP/6768. Automatic TCP/UDP forwarding is disabled in both directions;
+DNS uses the host resolver through an explicit namespace forwarder. The host
+listener audit permits this private `pasta` listener and T3's private Node
+listener only. Orca's unpacked AppImage remains mise-managed.
+Orca installs its Kimi lifecycle hooks in a marked block; Ansible preserves
+that block while managing the model and provider configuration.
+
+Startup output can contain pairing credentials, so both units write to
+mode-`0600` logs under `~/.config/private-harnesses/`, rotated daily or after
+5 MiB. Persistent app state is under `~/.t3` and `~/.config/orca`. The **T3 Code**
+and **Orca** Bitwarden secure notes contain mobile setup and recovery steps.
+Service status is available with `systemctl status t3code orca`; after a manual
+configuration repair use `sudo systemctl restart t3code` or `orca`.
+
+### The vault on the private server
+
+The private server keeps its own checkout of the markdown vault at
+`/home/dima/vault`, joined to `https://sb.dimalip.in` as the sync device
+`private`, so the coding agents can read and edit Dima's tasks and day notes.
+The role installs three things: the `sb` binary under `/opt/sb/bin`, a
+`/usr/local/bin/sb` wrapper that loads the sync URL and bearer token from the
+mode-`0600` `~/.config/private-harnesses/sb.env` and points the CLI at that
+vault, and the `vault-tasks` and `vault-daily` skills under
+`~/.claude/skills`.
+
+Each `sb task` and `sb day` command syncs by itself, before it reads and after
+it writes. `sb-sync.timer` reconciles every five minutes besides, which bounds
+how stale the files are for an agent that opens them directly rather than
+asking the CLI.
+
+Build the binary in the sb checkout, then converge:
+
+```sh
+cd ~/projects/sb && just cli
+cd ~/infra && just apply-sb-vault
+```
+
+`just apply-sb-vault` passes the built artifact and the repository's `skills/`
+directory to a `--tags sb_vault` apply; a plain `just apply-private` keeps
+whatever is installed. The sync token is not in Ansible Vault: `apply-private`
+reads it from the controller's `~/.config/sb/sync.env`, the same file the sb
+builds use.
+
+omp loads `~/.claude/skills` only because the role turns on its
+`skills.enableClaudeUser` setting, which ships off. Whether Kimi Code reads the
+same directory has not been tested.
 
 ## Production secrets
 

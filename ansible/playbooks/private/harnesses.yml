@@ -22,6 +22,9 @@
     - role: private_harnesses
       tags:
         - private_harnesses
+    - role: sb_vault
+      tags:
+        - sb_vault
 
   post_tasks:
     - name: Enforce the private-listener allowlist

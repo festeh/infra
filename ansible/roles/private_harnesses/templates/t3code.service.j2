@@ -1,0 +1,39 @@
+[Unit]
+Description=T3 Code private server
+Documentation=https://github.com/pingdotgg/t3code
+Wants=network-online.target tailscaled.service
+After=network-online.target tailscaled.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User={{ private_harnesses_user }}
+Group={{ private_harnesses_group }}
+WorkingDirectory={{ private_harnesses_home }}
+Environment=HOME={{ private_harnesses_home }}
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=T3CODE_HOME={{ private_harnesses_home }}/.t3
+ExecStart=/usr/local/bin/t3 serve --host {{ private_harnesses_tailscale_ipv4 }} --port {{ private_harnesses_t3_port }} --no-browser
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+UMask=0077
+TasksMax=4096
+StandardOutput=append:{{ private_harnesses_secret_directory }}/t3code-server.log
+StandardError=journal
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=false
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

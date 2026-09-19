@@ -1,0 +1,48 @@
+[Unit]
+Description=Reconcile the private server's vault with the sb sync server
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User={{ sb_vault_user }}
+Group={{ sb_vault_group }}
+WorkingDirectory={{ sb_vault_directory }}
+Environment=HOME={{ sb_vault_home }}
+EnvironmentFile={{ sb_vault_environment_file }}
+ExecStart={{ sb_vault_binary_path }} --vault {{ sb_vault_directory }} sync
+# A server that cannot be reached leaves the checkout as it was; the next run
+# pushes whatever this one could not.
+SuccessExitStatus=0 1
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sb-sync
+
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectHostname=true
+ProtectClock=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectProc=invisible
+ProcSubset=pid
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RemoveIPC=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadOnlyPaths={{ sb_vault_install_root }}
+ReadWritePaths={{ sb_vault_directory }}
+
+[Install]
+WantedBy=multi-user.target

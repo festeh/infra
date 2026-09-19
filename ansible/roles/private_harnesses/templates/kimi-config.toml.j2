@@ -27,3 +27,7 @@ max_context_size = 1048576
 capabilities = ["thinking", "always_thinking", "image_in", "video_in", "tool_use"]
 support_efforts = ["low", "high", "max"]
 default_effort = "high"
+{% if private_harnesses_kimi_orca_hooks.stdout | length > 0 %}
+
+{{ private_harnesses_kimi_orca_hooks.stdout }}
+{% endif %}

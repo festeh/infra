@@ -1,9 +1,29 @@
 [settings]
 lockfile = true
 locked = true
+minimum_release_age = "0s"
 
 [tools]
 node = "24.20.0"
-"github:can1357/oh-my-pi" = "18.1.7"
-"npm:@moonshot-ai/kimi-code" = "0.40.1"
-"npm:@getpaseo/cli" = "0.7.2"
+"github:can1357/oh-my-pi" = "latest"
+"npm:@moonshot-ai/kimi-code" = "latest"
+"npm:@getpaseo/cli" = "latest"
+# Reviewed theme-only package: upstream moved to pierrecomputer/pierre and its
+# 1.1.0 modules only export theme data, with no install scripts (see README).
+"npm:t3" = { version = "latest", allow_builds = ["node-pty"], trust_policy_excludes = ["@pierre/theme@1.1.0"] }
+
+# Pinned, not "latest": 1.4.205 starts Electron even for `orca serve`, which
+# it documents as windowless, and exits on this headless host with "Missing X
+# server or $DISPLAY". 1.4.197 serves without one. Try "latest" again when a
+# release fixes that.
+[tools."github:stablyai/orca"]
+version = "1.4.197"
+asset_pattern = "orca-linux.AppImage"
+bin = "orca-appimage"
+postinstall = '''
+set -eu
+cd "$MISE_TOOL_INSTALL_PATH"
+./orca-appimage --appimage-extract >/dev/null
+mkdir -p bin
+ln -sfn ../squashfs-root/resources/bin/orca-ide bin/orca
+'''

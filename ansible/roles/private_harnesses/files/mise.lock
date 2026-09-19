@@ -3,14 +3,27 @@
 lockfile_version = 1
 
 [[tools."github:can1357/oh-my-pi"]]
-version = "18.1.7"
+version = "18.2.6"
 backend = "github:can1357/oh-my-pi"
-specifiers = ["18.1.7"]
+specifiers = ["latest"]
 
 [tools."github:can1357/oh-my-pi"."platforms.linux-x64"]
-checksum = "sha256:6940fbf242ed719735d54bf9a51d790807cf76517b1af86aca09c756bd363ba6"
-url = "https://github.com/can1357/oh-my-pi/releases/download/v18.1.7/omp-linux-x64"
-url_api = "https://api.github.com/repos/can1357/oh-my-pi/releases/assets/543041340"
+checksum = "sha256:0f38598c91e823d8cce07f151ec3999d51f213fb2cc3e07d89f1af8eef9247a2"
+url = "https://github.com/can1357/oh-my-pi/releases/download/v18.2.6/omp-linux-x64"
+url_api = "https://api.github.com/repos/can1357/oh-my-pi/releases/assets/573171919"
+
+[[tools."github:stablyai/orca"]]
+version = "1.4.197"
+backend = "github:stablyai/orca"
+specifiers = ["1.4.197"]
+
+[tools."github:stablyai/orca".options]
+asset_pattern = "orca-linux.AppImage"
+
+[tools."github:stablyai/orca"."platforms.linux-x64"]
+checksum = "sha256:4bc8462d151ff010faa54c646bb16dcc5474bf664eed5ec5028182d79926416b"
+url = "https://github.com/stablyai/orca/releases/download/v1.4.197/orca-linux.AppImage"
+url_api = "https://api.github.com/repos/stablyai/orca/releases/assets/543548396"
 
 [[tools.node]]
 version = "24.20.0"
@@ -22,11 +35,20 @@ checksum = "sha256:855d581f8a4eb1a8117e3426de25fe02770592febcfb31369aee1ffbfee9e
 url = "https://nodejs.org/dist/v24.20.0/node-v24.20.0-linux-x64.tar.gz"
 
 [[tools."npm:@getpaseo/cli"]]
-version = "0.7.2"
+version = "0.8.0"
 backend = "npm:@getpaseo/cli"
-specifiers = ["0.7.2"]
+specifiers = ["latest"]
 
 [[tools."npm:@moonshot-ai/kimi-code"]]
-version = "0.40.1"
+version = "2.0.2"
 backend = "npm:@moonshot-ai/kimi-code"
-specifiers = ["0.40.1"]
+specifiers = ["latest"]
+
+[[tools."npm:t3"]]
+version = "0.0.42"
+backend = "npm:t3"
+specifiers = ["latest"]
+
+[tools."npm:t3".options]
+allow_builds = '["node-pty"]'
+trust_policy_excludes = '["@pierre/theme@1.1.0"]'

@@ -1,7 +1,24 @@
 ---
 - name: Restart Paseo
+  listen: Restart private apps
   ansible.builtin.systemd_service:
     name: "{{ private_harnesses_paseo_service }}"
+    daemon_reload: true
+    enabled: true
+    state: restarted
+
+- name: Restart T3 Code
+  listen: Restart private apps
+  ansible.builtin.systemd_service:
+    name: t3code.service
+    daemon_reload: true
+    enabled: true
+    state: restarted
+
+- name: Restart Orca
+  listen: Restart private apps
+  ansible.builtin.systemd_service:
+    name: orca.service
     daemon_reload: true
     enabled: true
     state: restarted

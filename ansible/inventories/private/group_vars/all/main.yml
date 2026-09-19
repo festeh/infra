@@ -31,3 +31,15 @@ allowed_public_listeners:
   - protocol: udp
     port: 68
     process: systemd-network
+  # T3 Code binds directly to its tailnet address and requires device pairing.
+  # 0.0.42 renamed the listening thread from MainThread to node-MainThread.
+  - protocol: tcp
+    port: 3773
+    address_cidr: 100.64.0.0/10
+    process: node-MainThread
+  # Orca's wildcard listener stays inside a private network namespace. pasta
+  # exposes only this tailnet-bound port; all automatic forwarding is disabled.
+  - protocol: tcp
+    port: 6768
+    address_cidr: 100.64.0.0/10
+    process: pasta.avx2

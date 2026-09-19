@@ -1,0 +1,64 @@
+---
+- name: Report requested tool refresh during check mode
+  ansible.builtin.debug:
+    msg: A live apply will refresh the five app releases and save the updated controller lockfile.
+  when: ansible_check_mode
+
+- name: Resolve the newest stable app releases in an isolated mise configuration
+  when: not ansible_check_mode
+  block:
+    - name: Create a temporary release-resolution directory
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: infra-mise-upgrade-
+      become_user: "{{ private_harnesses_user }}"
+      register: private_harnesses_upgrade_directory
+
+    # Resolve from a fresh lock: mise retains entries for old backend options
+    # when it updates an existing lock, which can leave multiple tool versions.
+    - name: Stage the mise declaration for fresh release resolution
+      ansible.builtin.copy:
+        src: mise.toml
+        dest: "{{ private_harnesses_upgrade_directory.path }}/config.toml"
+        owner: "{{ private_harnesses_user }}"
+        group: "{{ private_harnesses_group }}"
+        mode: "0600"
+
+    - name: Refresh app versions without the default release-age delay or cached version lists
+      ansible.builtin.command:
+        argv:
+          - "{{ private_harnesses_mise_binary }}"
+          - -C
+          - "{{ private_harnesses_upgrade_directory.path }}"
+          - lock
+          - --global
+          - --bump
+          - --platform
+          - linux-x64
+          - --json
+      become_user: "{{ private_harnesses_user }}"
+      environment: >-
+        {{ private_harnesses_mise_environment | combine({
+          'MISE_GLOBAL_CONFIG_FILE': private_harnesses_upgrade_directory.path ~ '/config.toml',
+          'MISE_CONFIG_DIR': private_harnesses_upgrade_directory.path,
+          'MISE_CEILING_PATHS': private_harnesses_upgrade_directory.path,
+          'MISE_LOCKED': '0',
+          'MISE_MINIMUM_RELEASE_AGE': '0s',
+          'MISE_FETCH_REMOTE_VERSIONS_CACHE': '0s'
+        }) }}
+      register: private_harnesses_upgrade_result
+      changed_when: private_harnesses_upgrade_result.stdout | from_json | length > 0
+
+    - name: Save the refreshed lockfile in the controller repository
+      ansible.builtin.fetch:
+        src: "{{ private_harnesses_upgrade_directory.path }}/mise.lock"
+        dest: "{{ role_path }}/files/mise.lock"
+        flat: true
+      become: false
+
+  always:
+    - name: Remove the temporary release-resolution directory
+      ansible.builtin.file:
+        path: "{{ private_harnesses_upgrade_directory.path }}"
+        state: absent
+      when: private_harnesses_upgrade_directory.path is defined

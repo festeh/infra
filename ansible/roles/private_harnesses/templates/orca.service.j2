@@ -1,0 +1,40 @@
+[Unit]
+Description=Orca private mobile server
+Documentation=https://www.onorca.dev/docs/remote-servers
+Wants=network-online.target tailscaled.service
+After=network-online.target tailscaled.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User={{ private_harnesses_user }}
+Group={{ private_harnesses_group }}
+WorkingDirectory={{ private_harnesses_home }}
+Environment=HOME={{ private_harnesses_home }}
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=LIBGL_ALWAYS_SOFTWARE=1
+# Orca's upstream listener is wildcard-only. pasta contains it in a private
+# network namespace and forwards exactly one TCP port on the tailnet address.
+# Explicit 'none' values disable pasta's automatic port forwarding in both directions.
+ExecStart=/usr/bin/pasta -f --config-net -4 --no-map-gw --dns-forward 169.254.1.1 --dns-host 127.0.0.53 -t {{ private_harnesses_tailscale_ipv4 }}/{{ private_harnesses_orca_port }} -u none -T none -U none -- /usr/bin/setpriv --no-new-privs /bin/bash /usr/local/bin/orca serve --port {{ private_harnesses_orca_port }} --pairing-address {{ private_harnesses_tailscale_ipv4 }} --mobile-pairing --json
+BindReadOnlyPaths={{ private_harnesses_secret_directory }}/orca-resolv.conf:/etc/resolv.conf
+KillMode=mixed
+Restart=on-failure
+RestartPreventExitStatus=3
+RestartSec=5s
+TimeoutStopSec=30s
+UMask=0077
+TasksMax=4096
+StandardOutput=append:{{ private_harnesses_secret_directory }}/orca-server.log
+StandardError=journal
+# Ubuntu's pasta AppArmor profile transitions its child to unconfined.
+# Set no-new-privileges in that child, after the required profile transition.
+NoNewPrivileges=false
+ProtectSystem=full
+ProtectHome=false
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

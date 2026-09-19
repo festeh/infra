@@ -1,0 +1,183 @@
+---
+- name: Require a complete sb vault declaration
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['distribution'] == 'Ubuntu'
+      - ansible_facts['architecture'] == 'x86_64'
+      - sb_vault_user == 'dima'
+      - sb_vault_sync_url is match('^https://')
+      - sb_vault_sync_token | length >= 32
+    fail_msg: >-
+      The private vault checkout needs SB_SYNC_URL and SB_SYNC_TOKEN in the
+      controller environment; `just apply-private` reads them from
+      ~/.config/sb/sync.env.
+    quiet: true
+  no_log: true
+
+- name: Create the vault checkout
+  ansible.builtin.file:
+    path: "{{ sb_vault_directory }}"
+    state: directory
+    owner: "{{ sb_vault_user }}"
+    group: "{{ sb_vault_group }}"
+    # The vault is the whole of Dima's notes; nobody else on the host reads it.
+    mode: "0700"
+
+- name: Create the sb installation directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ sb_vault_install_root }}"
+    - "{{ sb_vault_binary_path | dirname }}"
+
+# The same reasoning as sb-server's binary: no CI workflow pushes sb releases,
+# so the artifact comes from the controller's own build.
+- name: Install the sb release binary
+  ansible.builtin.copy:
+    src: "{{ sb_vault_release_artifact_path }}"
+    dest: "{{ sb_vault_binary_path }}"
+    owner: root
+    group: root
+    mode: "0755"
+  when: sb_vault_release_artifact_path | length > 0
+
+- name: Confirm the sb binary is present
+  ansible.builtin.stat:
+    path: "{{ sb_vault_binary_path }}"
+  register: sb_vault_binary_state
+
+- name: Require an installed sb binary
+  ansible.builtin.assert:
+    that:
+      - sb_vault_binary_state.stat.exists
+      - sb_vault_binary_state.stat.executable
+    fail_msg: >-
+      No sb binary is installed. Build it with `just cli` in the sb checkout
+      and supply sb_vault_release_artifact_path.
+    quiet: true
+  # A check-mode run reports the copy without making it, so an artifact on its
+  # way is not yet a file to stat.
+  when: not (ansible_check_mode and sb_vault_release_artifact_path | length > 0)
+
+- name: Create the private secret directory
+  ansible.builtin.file:
+    path: "{{ sb_vault_secret_directory }}"
+    state: directory
+    owner: "{{ sb_vault_user }}"
+    group: "{{ sb_vault_group }}"
+    mode: "0700"
+
+- name: Install the protected sb sync environment
+  ansible.builtin.copy:
+    content: |
+      SB_SYNC_URL={{ sb_vault_sync_url }}
+      SB_SYNC_TOKEN={{ sb_vault_sync_token }}
+    dest: "{{ sb_vault_environment_file }}"
+    owner: "{{ sb_vault_user }}"
+    group: "{{ sb_vault_group }}"
+    mode: "0600"
+  diff: false
+  no_log: true
+
+- name: Install the secret-loading sb command wrapper
+  ansible.builtin.template:
+    src: sb-wrapper.sh.j2
+    dest: "{{ sb_vault_wrapper_path }}"
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Create the skills directory the coding harnesses read
+  ansible.builtin.file:
+    path: "{{ sb_vault_skills_directory }}"
+    state: directory
+    owner: "{{ sb_vault_user }}"
+    group: "{{ sb_vault_group }}"
+    mode: "0755"
+
+# Skills ship from the sb repository so they cannot drift from the commands
+# they describe. Other skills in the directory are left alone.
+- name: Install the vault skills
+  ansible.builtin.copy:
+    src: "{{ sb_vault_skills_path }}/"
+    dest: "{{ sb_vault_skills_directory }}/"
+    owner: "{{ sb_vault_user }}"
+    group: "{{ sb_vault_group }}"
+    mode: "0644"
+    directory_mode: "0755"
+  when: sb_vault_skills_path | length > 0
+
+- name: Look for the omp harness
+  ansible.builtin.stat:
+    path: "{{ sb_vault_omp_binary }}"
+  register: sb_vault_omp_state
+
+- name: Read whether omp loads the user's skills directory
+  ansible.builtin.command:
+    argv:
+      - "{{ sb_vault_omp_binary }}"
+      - config
+      - get
+      - "{{ sb_vault_omp_skills_setting }}"
+  become_user: "{{ sb_vault_user }}"
+  environment:
+    HOME: "{{ sb_vault_home }}"
+  register: sb_vault_omp_skills
+  changed_when: false
+  check_mode: false
+  when: sb_vault_omp_state.stat.exists
+
+# Skills the agents never see are skills that do not exist. Set through omp's
+# own command rather than by writing its config file, which holds whatever
+# else Dima has set interactively.
+- name: Let omp load the skills installed above
+  ansible.builtin.command:
+    argv:
+      - "{{ sb_vault_omp_binary }}"
+      - config
+      - set
+      - "{{ sb_vault_omp_skills_setting }}"
+      - "true"
+  become_user: "{{ sb_vault_user }}"
+  environment:
+    HOME: "{{ sb_vault_home }}"
+  when:
+    - sb_vault_omp_state.stat.exists
+    - sb_vault_omp_skills.stdout | default("") | trim != "true"
+
+- name: Install the vault reconciliation units
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - "{{ sb_vault_sync_service }}"
+    - "{{ sb_vault_sync_timer }}"
+  register: sb_vault_units
+
+- name: Reload systemd for changed vault units
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: sb_vault_units.changed
+
+# Units systemd has not been handed yet cannot be enabled or started, which is
+# every unit during the check-mode run that reports writing them.
+- name: Enable the periodic vault reconciliation
+  ansible.builtin.systemd_service:
+    name: "{{ sb_vault_sync_timer }}"
+    enabled: true
+    state: started
+  when: not (ansible_check_mode and sb_vault_units.changed)
+
+- name: Reconcile the vault once now
+  ansible.builtin.systemd_service:
+    name: "{{ sb_vault_sync_service }}"
+    state: started
+  changed_when: false
+  when: not (ansible_check_mode and sb_vault_units.changed)

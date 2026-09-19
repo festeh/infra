@@ -25,20 +25,26 @@ private_harnesses_mise_environment:
   MISE_NPM_PACKAGE_MANAGER: aube
   MISE_YES: "1"
 
-private_harnesses_omp_version: 18.1.7
+# Version checks derive from the committed lockfile, including after a bump.
+private_harnesses_upgrade: false
+private_harnesses_omp_version: "{{ private_harnesses_versions['github:can1357/oh-my-pi'] }}"
 private_harnesses_omp_binary: /usr/local/bin/omp
 
-private_harnesses_kimi_version: 0.40.1
+private_harnesses_kimi_version: "{{ private_harnesses_versions['npm:@moonshot-ai/kimi-code'] }}"
 private_harnesses_kimi_binary: /usr/local/bin/kimi
 private_harnesses_kimi_base_url: https://api.kimi.com/coding/v1
 private_harnesses_kimi_default_model: k3
 
-private_harnesses_node_version: 24.20.0
-private_harnesses_paseo_version: 0.7.2
+private_harnesses_node_version: "{{ private_harnesses_versions['node'] }}"
+private_harnesses_paseo_version: "{{ private_harnesses_versions['npm:@getpaseo/cli'] }}"
 private_harnesses_paseo_binary: /usr/local/bin/paseo
 private_harnesses_paseo_home: "{{ private_harnesses_home }}/.paseo"
 private_harnesses_paseo_port: 6767
 private_harnesses_paseo_service: paseo.service
+private_harnesses_t3_version: "{{ private_harnesses_versions['npm:t3'] }}"
+private_harnesses_t3_port: 3773
+private_harnesses_orca_version: "{{ private_harnesses_versions['github:stablyai/orca'] }}"
+private_harnesses_orca_port: 6768
 private_harnesses_controller_paseo_password_file: >-
   {{ inventory_dir }}/group_vars/all/.paseo-password
 

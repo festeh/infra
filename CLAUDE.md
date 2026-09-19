@@ -20,8 +20,8 @@ recipes.
   expire; nothing else about that service is manual.
 - `just apply` repeatedly converges and verifies only the public service host.
 - `just apply-private` repeatedly converges and verifies the private host,
-  including Tailscale, checksum-pinned mise, its locked OMP/Kimi/Paseo
-  toolchain, and the Tailscale-only Paseo service. It loads only `KIMI_API_KEY`
+  including Tailscale, checksum-pinned mise, its locked OMP/Kimi/Paseo/T3/Orca
+  toolchain, and the Tailscale-only app services. It loads only `KIMI_API_KEY`
   and `OLLAMA_API_KEY` from `~/dotfiles/.env`. Its first run requires a one-off
   or restricted Tailscale auth key in the controller's `TAILSCALE_AUTH_KEY`
   environment variable; later runs use the node's persistent identity and need
@@ -44,12 +44,29 @@ Syncthing were restored by 2026-07-19:
 - Operating system: Ubuntu 26.04 LTS.
 - Administration: key-based `dima` with non-interactive sudo.
 - The private server runs checksum-pinned mise 2026.9.1, which manages locked
-  Node.js 24.20.0, OMP 18.1.7, Kimi Code 0.40.1, and Paseo 0.7.2 releases.
+  Node.js 24.20.0, OMP 18.2.6, Kimi Code 2.0.2, Paseo 0.8.0, T3 Code 0.0.42,
+  and Orca 1.4.197 releases. The committed lockfile is authoritative. Orca
+  alone is pinned in `mise.toml` rather than tracking `latest`: 1.4.205 starts
+  Electron for `orca serve` and exits on this headless host.
+  `private_harnesses_upgrade=true` refreshes all five apps, saves the controller
+  lockfile, and deploys it; release-age delay is disabled. T3 binds to Tailscale
+  TCP/3773. Orca runs in a private network namespace, with pasta exposing only
+  Tailscale TCP/6768. Both use device pairing; mobile instructions are in the
+  T3 Code and Orca Bitwarden notes.
   Paseo is password-authenticated, binds only to its Tailscale IPv4 address on
   TCP/6767, disables the relay and unused speech features, and exposes both OMP
   and Kimi as available providers. Private API keys come only from the
   controller environment and protected mode-`0600` server files; the generated
   Paseo password has an ignored controller copy.
+- The private server also holds a vault checkout at `/home/dima/vault`, synced
+  against `sb.dimalip.in` as the device `private`: `sb-sync.timer` every five
+  minutes, and every `sb task` or `sb day` command on its own account. The
+  `sb_vault` role installs the binary, the `/usr/local/bin/sb` wrapper that
+  loads `~/.config/private-harnesses/sb.env`, and the vault skills under
+  `~/.claude/skills`, all from the sb repository — `just cli` there, then
+  `just apply-sb-vault` here. The sync token comes from the controller's
+  `~/.config/sb/sync.env`, never from Ansible Vault. The role also turns on
+  omp's `skills.enableClaudeUser`, without which the skills are invisible.
 - Timezone: `Europe/Berlin`; Chrony is active and synchronized.
 - Daily unattended security upgrades are active; automatic unattended reboots
   are disabled. An explicit `just apply` reboots when Ubuntu reports that an
@@ -232,9 +249,11 @@ dedicated PostgreSQL database.
   prerequisite (`ca-certificates`), and the private user's protected mise
   directories.
 - `ansible/roles/private_harnesses` owns the committed locked mise declaration
-  for Node.js, OMP, Kimi Code, and Paseo; protected Kimi/Ollama credentials;
+  for Node.js, OMP, Kimi Code, Paseo, T3 Code, and Orca; opt-in release refresh;
+  protected Kimi/Ollama credentials;
   generated local-only Paseo password; mise-backed system-path wrappers; the
-  Tailscale-only/password-authenticated daemon; enabled OMP/Kimi providers;
+  Tailscale-only/password-authenticated Paseo daemon; T3 and Orca services
+  with protected pairing logs; Orca network isolation; enabled OMP/Kimi providers;
   disabled speech downloads; and runtime, model-catalogue, authentication, and
   listener verification.
 - `ansible/roles/binary_release` implements the shared restricted deployment
@@ -278,7 +297,9 @@ client, and Tailscale's explicitly fixed UDP/41641 peer socket from
 `tailscaled`. It also permits `tailscaled`'s dynamic TCP PeerAPI listeners only
 when they bind within Tailscale's private `100.64.0.0/10` or
 `fd7a:115c:a1e0::/48` ranges; the same ports remain forbidden on wildcard and
-public addresses. Tailscale SSH remains disabled; clients use the existing
+public addresses. App rules allow Tailscale IPv4 TCP/6767 for Paseo, TCP/3773
+for T3 Code, and TCP/6768 for Orca through pasta; wildcard and public app
+listeners remain forbidden. Tailscale SSH remains disabled; clients use the existing
 hardened OpenSSH service over the tailnet. The provider firewall should allow
 inbound UDP/41641 to maximize direct peer connections, while Tailscale can use
 a relay when a direct path is unavailable.

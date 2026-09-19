@@ -1,0 +1,148 @@
+---
+- name: Create private T3 Code and Orca state directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ private_harnesses_user }}"
+    group: "{{ private_harnesses_group }}"
+    mode: "0700"
+  loop:
+    - "{{ private_harnesses_home }}/.t3"
+    - "{{ private_harnesses_home }}/.config/orca"
+
+- name: Keep pairing links in protected startup logs
+  ansible.builtin.file:
+    path: "{{ private_harnesses_secret_directory }}/{{ item }}-server.log"
+    state: touch
+    owner: "{{ private_harnesses_user }}"
+    group: "{{ private_harnesses_group }}"
+    mode: "0600"
+    access_time: preserve
+    modification_time: preserve
+  loop:
+    - t3code
+    - orca
+
+- name: Configure DNS forwarding inside the Orca network namespace
+  ansible.builtin.copy:
+    dest: "{{ private_harnesses_secret_directory }}/orca-resolv.conf"
+    content: |
+      nameserver 169.254.1.1
+      search {{ private_harnesses_tailscale_dns_name.split('.', 1)[1] }}
+    owner: "{{ private_harnesses_user }}"
+    group: "{{ private_harnesses_group }}"
+    mode: "0600"
+  notify: Restart Orca
+
+- name: Bound the protected mobile-app startup logs
+  ansible.builtin.copy:
+    dest: /etc/logrotate.d/private-mobile-apps
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      {{ private_harnesses_secret_directory }}/*-server.log {
+          daily
+          maxsize 5M
+          rotate 3
+          missingok
+          notifempty
+          compress
+          copytruncate
+          su {{ private_harnesses_user }} {{ private_harnesses_group }}
+      }
+
+- name: Install the private T3 Code service
+  ansible.builtin.template:
+    src: t3code.service.j2
+    dest: /etc/systemd/system/t3code.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart T3 Code
+
+- name: Install the private Orca service
+  ansible.builtin.template:
+    src: orca.service.j2
+    dest: /etc/systemd/system/orca.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart Orca
+
+- name: Enable and start the mobile apps
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    daemon_reload: true
+    enabled: true
+    state: started
+  loop:
+    - t3code.service
+    - orca.service
+
+- name: Apply mobile app service changes before checking connections
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait for the private mobile app ports
+  ansible.builtin.wait_for:
+    host: "{{ private_harnesses_tailscale_ipv4 }}"
+    port: "{{ item }}"
+    timeout: 90
+  loop:
+    - "{{ private_harnesses_t3_port }}"
+    - "{{ private_harnesses_orca_port }}"
+  when: not ansible_check_mode
+
+- name: Verify the T3 Code web client
+  ansible.builtin.uri:
+    url: "http://{{ private_harnesses_tailscale_ipv4 }}:{{ private_harnesses_t3_port }}/"
+    status_code: 200
+  when: not ansible_check_mode
+
+- name: Verify T3 Code rejects unauthenticated control requests
+  ansible.builtin.uri:
+    url: "http://{{ private_harnesses_tailscale_ipv4 }}:{{ private_harnesses_t3_port }}/api/orchestration/snapshot"
+    status_code: 401
+  when: not ansible_check_mode
+
+- name: Verify Orca runtime readiness
+  ansible.builtin.command:
+    argv:
+      - /usr/local/bin/orca
+      - status
+      - --json
+  become_user: "{{ private_harnesses_user }}"
+  register: private_harnesses_orca_status
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Require a ready Orca runtime and project graph
+  ansible.builtin.assert:
+    that:
+      - (private_harnesses_orca_status.stdout | from_json).ok
+      - (private_harnesses_orca_status.stdout | from_json).result.runtime.state == 'ready'
+      - (private_harnesses_orca_status.stdout | from_json).result.graph.state == 'ready'
+    quiet: true
+  when: not ansible_check_mode
+
+- name: Verify Orca rejects clients without the encrypted pairing handshake
+  ansible.builtin.command:
+    argv:
+      - "{{ private_harnesses_mise_data_directory }}/installs/node/{{ private_harnesses_node_version }}/bin/node"
+      - -e
+      - |
+        const ws = new WebSocket(process.argv[1]);
+        const timer = setTimeout(() => process.exit(1), 10000);
+        ws.addEventListener('open', () => ws.send(JSON.stringify({
+          id: 'infra-unauthenticated', method: 'status.get', params: {}
+        })));
+        ws.addEventListener('message', () => process.exit(1));
+        ws.addEventListener('error', () => process.exit(1));
+        ws.addEventListener('close', event => {
+          clearTimeout(timer);
+          process.exit(event.code === 4001 && event.reason === 'Invalid e2ee_hello' ? 0 : 1);
+        });
+      - "ws://{{ private_harnesses_tailscale_ipv4 }}:{{ private_harnesses_orca_port }}"
+  become_user: "{{ private_harnesses_user }}"
+  changed_when: false
+  when: not ansible_check_mode

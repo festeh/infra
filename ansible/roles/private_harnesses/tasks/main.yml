@@ -124,6 +124,67 @@
     fail_msg: The private harness playbook requires the pinned mise bootstrap.
     quiet: true
 
+- name: Refresh app releases when explicitly requested
+  ansible.builtin.include_tasks: upgrade.yml
+  when: private_harnesses_upgrade | bool
+
+- name: Read exact runtime versions from the controller lockfile
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - >-
+        import json,sys,tomllib;
+        data=tomllib.load(open(sys.argv[1], 'rb'));
+        assert all(len(v) == 1 for v in data['tools'].values()), 'Refresh the mise lockfile to remove obsolete tool declarations';
+        print(json.dumps({k:v[0]['version'] for k,v in data['tools'].items()}))
+      - "{{ role_path }}/files/mise.lock"
+  delegate_to: localhost
+  become: false
+  check_mode: false
+  changed_when: false
+  register: private_harnesses_lock_versions
+
+- name: Use the locked versions for installation and verification
+  ansible.builtin.set_fact:
+    private_harnesses_versions: "{{ private_harnesses_lock_versions.stdout | from_json }}"
+
+- name: Install mobile app runtime dependencies and private network transport
+  ansible.builtin.apt:
+    name:
+      - build-essential
+      - python3
+      - xvfb
+      - passt
+      - libgtk-3-0t64
+      - libnss3
+      - libatk1.0-0t64
+      - libatk-bridge2.0-0t64
+      - libgbm1
+      - libasound2t64
+      - libxtst6
+      - libcups2t64
+      - libdrm2
+      - libxkbcommon0
+      - libpango-1.0-0
+      - libcairo2
+      - libatspi2.0-0t64
+      - libxcomposite1
+      - libxdamage1
+      - libxfixes3
+      - libxrandr2
+      - libxrender1
+      - libx11-xcb1
+      - libxcb-dri3-0
+      - libxss1
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+    install_recommends: false
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+    NEEDRESTART_MODE: a
+
 - name: Inspect mise-managed harness installations before convergence
   ansible.builtin.stat:
     path: "{{ item }}"
@@ -134,6 +195,10 @@
       {{ private_harnesses_mise_data_directory }}/installs/npm-moonshot-ai-kimi-code/{{ private_harnesses_kimi_version }}/node_modules/.bin/kimi
     - >-
       {{ private_harnesses_mise_data_directory }}/installs/npm-getpaseo-cli/{{ private_harnesses_paseo_version }}/node_modules/.bin/paseo
+    - >-
+      {{ private_harnesses_mise_data_directory }}/installs/npm-t3/{{ private_harnesses_t3_version }}/node_modules/.bin/t3
+    - >-
+      {{ private_harnesses_mise_data_directory }}/installs/github-stablyai-orca/{{ private_harnesses_orca_version }}/bin/orca
   register: private_harnesses_installations_before_apply
 
 - name: Defer first-time private harness installation during check mode
@@ -151,7 +216,7 @@
     owner: "{{ private_harnesses_user }}"
     group: "{{ private_harnesses_group }}"
     mode: "0600"
-  notify: Restart Paseo
+  notify: Restart private apps
 
 - name: Install the private mise artifact lock
   ansible.builtin.copy:
@@ -160,7 +225,7 @@
     owner: "{{ private_harnesses_user }}"
     group: "{{ private_harnesses_group }}"
     mode: "0600"
-  notify: Restart Paseo
+  notify: Restart private apps
 
 - name: Inspect the locked private mise install plan
   ansible.builtin.command:
@@ -193,7 +258,68 @@
     - not ansible_check_mode
     - private_harnesses_mise_install_plan.rc == 1
   changed_when: true
-  notify: Restart Paseo
+  notify: Restart private apps
+
+- name: Check T3 Code's native terminal module
+  ansible.builtin.command:
+    argv:
+      - "{{ private_harnesses_mise_binary }}"
+      - -C
+      - "{{ private_harnesses_mise_config_directory }}"
+      - exec
+      - --
+      - node
+      - -e
+      - require('node:module').createRequire(require('node:fs').realpathSync(process.argv[1]))('node-pty')
+      - "{{ private_harnesses_mise_data_directory }}/installs/npm-t3/{{ private_harnesses_t3_version }}/node_modules/t3/package.json"
+  become_user: "{{ private_harnesses_user }}"
+  environment: "{{ private_harnesses_mise_environment }}"
+  register: private_harnesses_t3_pty
+  changed_when: false
+  failed_when: private_harnesses_t3_pty.rc not in [0, 1]
+  when: not ansible_check_mode
+
+- name: Repair a T3 Code installation missing its native terminal module
+  ansible.builtin.command:
+    argv:
+      - "{{ private_harnesses_mise_binary }}"
+      - -C
+      - "{{ private_harnesses_mise_config_directory }}"
+      - install
+      - --locked
+      - --force
+      - npm:t3
+  become_user: "{{ private_harnesses_user }}"
+  environment: "{{ private_harnesses_mise_environment }}"
+  when:
+    - not ansible_check_mode
+    - private_harnesses_t3_pty.rc != 0
+  changed_when: true
+  notify: Restart T3 Code
+
+- name: Check the Orca AppImage postinstall result
+  ansible.builtin.stat:
+    path: >-
+      {{ private_harnesses_mise_data_directory }}/installs/github-stablyai-orca/{{ private_harnesses_orca_version }}/bin/orca
+  register: private_harnesses_orca_cli
+
+- name: Repair an interrupted Orca postinstall through mise
+  ansible.builtin.command:
+    argv:
+      - "{{ private_harnesses_mise_binary }}"
+      - -C
+      - "{{ private_harnesses_mise_config_directory }}"
+      - install
+      - --locked
+      - --force
+      - github:stablyai/orca
+  become_user: "{{ private_harnesses_user }}"
+  environment: "{{ private_harnesses_mise_environment }}"
+  when:
+    - not ansible_check_mode
+    - not private_harnesses_orca_cli.stat.exists
+  changed_when: true
+  notify: Restart Orca
 
 - name: Remove distro Node.js now owned by mise
   ansible.builtin.apt:
@@ -259,6 +385,25 @@
     path: "{{ private_harnesses_legacy_environment_file }}"
     state: absent
 
+- name: Preserve the lifecycle hooks maintained by Orca in Kimi's configuration
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - |
+        import pathlib, re, sys
+        path = pathlib.Path(sys.argv[1])
+        text = path.read_text() if path.exists() else ''
+        block = re.search(
+            r'(?m)^# >>> orca-managed-kimi-hooks \(managed by Orca; do not edit\) >>>\n'
+            r'[\s\S]*?^# <<< orca-managed-kimi-hooks <<<$', text)
+        print(block.group(0) if block else '')
+      - "{{ private_harnesses_kimi_config }}"
+  register: private_harnesses_kimi_orca_hooks
+  check_mode: false
+  changed_when: false
+  no_log: true
+
 - name: Install the protected Kimi Code configuration
   ansible.builtin.template:
     src: kimi-config.toml.j2
@@ -306,6 +451,18 @@
     mode: "0600"
   notify: Restart Paseo
 
+- name: Install mise-backed T3 Code and Orca commands
+  ansible.builtin.template:
+    src: mobile-app-wrapper.sh.j2
+    dest: "/usr/local/bin/{{ item }}"
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - t3
+    - orca
+  notify: Restart private apps
+
 - name: Install the hardened Paseo system service
   ansible.builtin.template:
     src: paseo.service.j2
@@ -321,6 +478,9 @@
     daemon_reload: true
     enabled: true
     state: started
+
+- name: Configure T3 Code and Orca mobile access
+  ansible.builtin.include_tasks: mobile_apps.yml
 
 - name: Apply private harness service changes before verification
   ansible.builtin.meta: flush_handlers
@@ -345,6 +505,8 @@
     - omp
     - kimi
     - paseo
+    - t3
+    - orca
   register: private_harnesses_mise_paths
   check_mode: false
   changed_when: false
@@ -401,6 +563,12 @@
     - name: Paseo
       binary: "{{ private_harnesses_paseo_binary }}"
       version: "{{ private_harnesses_paseo_version }}"
+    - name: T3 Code
+      binary: /usr/local/bin/t3
+      version: "{{ private_harnesses_t3_version }}"
+    - name: Orca
+      binary: /usr/local/bin/orca
+      version: "{{ private_harnesses_orca_version }}"
   loop_control:
     label: "{{ item.name }}"
   register: private_harnesses_version_results

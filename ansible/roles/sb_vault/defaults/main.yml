@@ -1,0 +1,43 @@
+---
+# sb on the private server: a vault checkout that syncs like any other device,
+# and the `sb` commands the coding agents read and edit its tasks through.
+#
+# Everything here runs as dima rather than a service account of its own. The
+# vault is dima's, the agents Paseo starts are dima's, and a second user would
+# only mean one more account that can read the same files.
+sb_vault_user: dima
+sb_vault_group: dima
+sb_vault_home: /home/dima
+sb_vault_directory: "{{ sb_vault_home }}/vault"
+
+sb_vault_install_root: /opt/sb
+sb_vault_binary_path: "{{ sb_vault_install_root }}/bin/sb"
+sb_vault_wrapper_path: /usr/local/bin/sb
+
+# Built on the controller from the sb checkout:
+#   cd ~/projects/sb && just cli
+# Left empty, an apply keeps whatever is installed.
+sb_vault_release_artifact_path: ""
+# The sb repository's skills/ directory, copied to where the harnesses look.
+sb_vault_skills_path: ""
+sb_vault_skills_directory: "{{ sb_vault_home }}/.claude/skills"
+
+# omp reads ~/.claude/skills only when told to; the setting is off by default
+# and lives in its own agent config, not in a file this role can template.
+sb_vault_omp_binary: /usr/local/bin/omp
+sb_vault_omp_skills_setting: skills.enableClaudeUser
+
+sb_vault_secret_directory: "{{ sb_vault_home }}/.config/private-harnesses"
+sb_vault_environment_file: "{{ sb_vault_secret_directory }}/sb.env"
+
+# The controller holds these in ~/.config/sb/sync.env; the private apply
+# recipe sources that file and exports them.
+sb_vault_sync_url: "{{ lookup('ansible.builtin.env', 'SB_SYNC_URL') }}"
+sb_vault_sync_token: "{{ lookup('ansible.builtin.env', 'SB_SYNC_TOKEN') }}"
+
+# Every task and day command syncs by itself. The timer is for the other way
+# an agent reads the vault — opening the files — and bounds how stale that
+# can be.
+sb_vault_sync_interval: 5min
+sb_vault_sync_service: sb-sync.service
+sb_vault_sync_timer: sb-sync.timer

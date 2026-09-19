@@ -1,6 +1,8 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
 ansible_dir := justfile_directory() + "/ansible"
+# The sb checkout the private server's CLI and skills are installed from.
+sb_checkout := env('SB_CHECKOUT', env('HOME') + "/projects/sb")
 public_inventory := ansible_dir + "/inventories/public/hosts.yml"
 private_inventory := ansible_dir + "/inventories/private/hosts.yml"
 
@@ -132,5 +134,21 @@ apply-private *ansible_args:
     fi
     export KIMI_API_KEY OLLAMA_API_KEY
 
+    # The vault's sync server and bearer token, as the sb builds read them.
+    sync_env="$HOME/.config/sb/sync.env"
+    if [[ ! -r "$sync_env" ]]; then
+      echo "Private apply requires a readable $sync_env" >&2
+      exit 1
+    fi
+    set -o allexport
+    source "$sync_env"
+    set +o allexport
+    : "${SB_SYNC_URL:?SB_SYNC_URL is missing from $sync_env}"
+    : "${SB_SYNC_TOKEN:?SB_SYNC_TOKEN is missing from $sync_env}"
+
     cd "{{ ansible_dir }}"
     ansible-playbook -i "{{ private_inventory }}" playbooks/private/site.yml {{ ansible_args }}
+
+# Install the private server's sb CLI and skills from the local sb checkout.
+# Build the binary first: `cd ~/projects/sb && just cli`.
+apply-sb-vault: (apply-private "--tags" "sb_vault" "-e" ("sb_vault_release_artifact_path=" + sb_checkout + "/target/x86_64-unknown-linux-musl/release/sb") "-e" ("sb_vault_skills_path=" + sb_checkout + "/skills"))

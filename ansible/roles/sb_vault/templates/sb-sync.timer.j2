@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodic vault reconciliation for agents that read the files directly
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec={{ sb_vault_sync_interval }}
+Persistent=true
+Unit={{ sb_vault_sync_service }}
+
+[Install]
+WantedBy=timers.target
