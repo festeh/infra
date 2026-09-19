@@ -44,6 +44,14 @@ version = "2.0.2"
 backend = "npm:@moonshot-ai/kimi-code"
 specifiers = ["latest"]
 
+[[tools."npm:opencode-ai"]]
+version = "1.18.31"
+backend = "npm:opencode-ai"
+specifiers = ["latest"]
+
+[tools."npm:opencode-ai".options]
+allow_builds = '["opencode-ai"]'
+
 [[tools."npm:t3"]]
 version = "0.0.42"
 backend = "npm:t3"

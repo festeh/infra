@@ -41,6 +41,30 @@ private_harnesses_paseo_binary: /usr/local/bin/paseo
 private_harnesses_paseo_home: "{{ private_harnesses_home }}/.paseo"
 private_harnesses_paseo_port: 6767
 private_harnesses_paseo_service: paseo.service
+# OpenCode is here as T3 Code's provider: T3 drives agent CLIs rather than
+# model APIs, and OpenCode is the one that takes an arbitrary
+# OpenAI-compatible endpoint, which is what Ollama Cloud serves.
+private_harnesses_opencode_version: "{{ private_harnesses_versions['npm:opencode-ai'] }}"
+private_harnesses_opencode_binary: /usr/local/bin/opencode
+private_harnesses_opencode_config_directory: >-
+  {{ private_harnesses_home }}/.config/opencode
+private_harnesses_opencode_config: >-
+  {{ private_harnesses_opencode_config_directory }}/opencode.json
+private_harnesses_opencode_provider: ollama-cloud
+private_harnesses_opencode_base_url: https://ollama.com/v1
+# Reviewed subset of what the Ollama Cloud subscription serves. The code-tuned
+# Kimi drives sessions; the small one titles them and does other odd jobs.
+private_harnesses_opencode_models:
+  "kimi-k2.7-code": Kimi K2.7 Code
+  "kimi-k3": Kimi K3
+  "glm-5.3": GLM 5.3
+  "minimax-m3": MiniMax M3
+  "qwen3.5:397b": Qwen 3.5 397B
+  "gpt-oss:120b": GPT-OSS 120B
+  "gpt-oss:20b": GPT-OSS 20B
+private_harnesses_opencode_model: "kimi-k2.7-code"
+private_harnesses_opencode_small_model: "gpt-oss:20b"
+
 private_harnesses_t3_version: "{{ private_harnesses_versions['npm:t3'] }}"
 private_harnesses_t3_binary: /usr/local/bin/t3
 private_harnesses_t3_port: 3773
@@ -56,6 +80,8 @@ private_harnesses_paseo_environment_file: >-
   {{ private_harnesses_secret_directory }}/paseo.env
 private_harnesses_omp_environment_file: >-
   {{ private_harnesses_secret_directory }}/omp.env
+private_harnesses_opencode_environment_file: >-
+  {{ private_harnesses_secret_directory }}/opencode.env
 private_harnesses_legacy_environment_file: >-
   {{ private_harnesses_secret_directory }}/runtime.env
 private_harnesses_kimi_home: "{{ private_harnesses_home }}/.kimi-code"

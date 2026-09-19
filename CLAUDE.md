@@ -44,8 +44,10 @@ Syncthing were restored by 2026-07-19:
 - Operating system: Ubuntu 26.04 LTS.
 - Administration: key-based `dima` with non-interactive sudo.
 - The private server runs checksum-pinned mise 2026.9.1, which manages locked
-  Node.js 24.20.0, OMP 18.2.6, Kimi Code 2.0.2, Paseo 0.8.0, T3 Code 0.0.42,
-  and Orca 1.4.197 releases. The committed lockfile is authoritative. Orca
+  Node.js 24.20.0, OMP 18.2.6, Kimi Code 2.0.2, Paseo 0.8.0, OpenCode 1.18.31,
+  T3 Code 0.0.42, and Orca 1.4.197 releases. OpenCode is T3 Code's provider,
+  configured against Ollama Cloud directly (not through ai.dimalip.in) with the
+  key loaded by its wrapper and named, not carried, in its configuration. The committed lockfile is authoritative. Orca
   alone is pinned in `mise.toml` rather than tracking `latest`: 1.4.205 starts
   Electron for `orca serve` and exits on this headless host.
   `private_harnesses_upgrade=true` refreshes all five apps, saves the controller

@@ -343,6 +343,17 @@
   no_log: true
   notify: Restart Paseo
 
+- name: Install the protected OpenCode provider environment
+  ansible.builtin.copy:
+    content: |
+      OLLAMA_API_KEY={{ private_harnesses_secrets.ollama_api_key | to_json }}
+    dest: "{{ private_harnesses_opencode_environment_file }}"
+    owner: "{{ private_harnesses_user }}"
+    group: "{{ private_harnesses_group }}"
+    mode: "0600"
+  diff: false
+  no_log: true
+
 - name: Remove the superseded combined harness environment
   ansible.builtin.file:
     path: "{{ private_harnesses_legacy_environment_file }}"
@@ -414,6 +425,32 @@
     mode: "0600"
   notify: Restart Paseo
 
+- name: Install the secret-loading OpenCode command wrapper
+  ansible.builtin.template:
+    src: opencode-wrapper.sh.j2
+    dest: "{{ private_harnesses_opencode_binary }}"
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Create the OpenCode configuration directory
+  ansible.builtin.file:
+    path: "{{ private_harnesses_opencode_config_directory }}"
+    state: directory
+    owner: "{{ private_harnesses_user }}"
+    group: "{{ private_harnesses_group }}"
+    mode: "0700"
+
+# The configuration names the key rather than carrying it, so T3 Code can
+# start OpenCode sessions without a login step of its own.
+- name: Install the Ollama Cloud provider for OpenCode
+  ansible.builtin.template:
+    src: opencode.json.j2
+    dest: "{{ private_harnesses_opencode_config }}"
+    owner: "{{ private_harnesses_user }}"
+    group: "{{ private_harnesses_group }}"
+    mode: "0600"
+
 - name: Install mise-backed T3 Code and Orca commands
   ansible.builtin.template:
     src: mobile-app-wrapper.sh.j2
@@ -468,6 +505,7 @@
     - omp
     - kimi
     - paseo
+    - opencode
     - t3
     - orca
   register: private_harnesses_mise_paths
@@ -526,6 +564,9 @@
     - name: Paseo
       binary: "{{ private_harnesses_paseo_binary }}"
       version: "{{ private_harnesses_paseo_version }}"
+    - name: OpenCode
+      binary: "{{ private_harnesses_opencode_binary }}"
+      version: "{{ private_harnesses_opencode_version }}"
     - name: T3 Code
       binary: "{{ private_harnesses_t3_binary }}"
       version: "{{ private_harnesses_t3_version }}"

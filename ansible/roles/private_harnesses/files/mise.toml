@@ -8,6 +8,9 @@ node = "24.20.0"
 "github:can1357/oh-my-pi" = "latest"
 "npm:@moonshot-ai/kimi-code" = "latest"
 "npm:@getpaseo/cli" = "latest"
+# Its own postinstall unpacks the platform binary; without the build
+# permission the launcher installs but refuses to run.
+"npm:opencode-ai" = { version = "latest", allow_builds = ["opencode-ai"] }
 # Reviewed theme-only package: upstream moved to pierrecomputer/pierre and its
 # 1.1.0 modules only export theme data, with no install scripts (see README).
 "npm:t3" = { version = "latest", allow_builds = ["node-pty"], trust_policy_excludes = ["@pierre/theme@1.1.0"] }

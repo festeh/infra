@@ -164,8 +164,8 @@ the committed, locked tool declaration. The main private site imports both in
 that order, so `just apply-private` remains the normal complete and idempotent
 entry point.
 
-Mise manages Node.js 24.20.0 and five apps: OMP, Kimi Code, Paseo, T3 Code
-(`npm:t3`), and Orca (`github:stablyai/orca`). Their exact versions live in
+Mise manages Node.js 24.20.0 and six apps: OMP, Kimi Code, Paseo, OpenCode
+(`npm:opencode-ai`), T3 Code (`npm:t3`), and Orca (`github:stablyai/orca`). Their exact versions live in
 `ansible/roles/private_harnesses/files/mise.lock`; normal applies reproduce that
 lock. Node remains pinned; the apps use `latest` selectors.
 
@@ -237,9 +237,32 @@ t3 pair --ttl 1h --label mobile
 Each link is one-use and expires after one hour; an already paired device can
 reconnect without it. The direct URL also works in a browser. The hosted
 `app.t3.codes` client requires HTTPS and is not the endpoint used here. T3
-requires a supported, authenticated provider CLI before starting agent work;
-Kimi Code and OMP are not direct T3 providers. See the
+requires a supported provider CLI before starting agent work; Kimi Code and OMP
+are not among them. See the
 [upstream provider setup](https://github.com/pingdotgg/t3code/blob/main/docs/user/install.md#providers).
+
+**OpenCode** is that provider here. T3 drives agent CLIs rather than model
+APIs, and OpenCode is the supported one that accepts an arbitrary
+OpenAI-compatible endpoint, which is what the Ollama Cloud subscription serves
+at `https://ollama.com/v1`. The role installs `/usr/local/bin/opencode` as a
+wrapper that loads `OLLAMA_API_KEY` from the mode-`0600`
+`~/.config/private-harnesses/opencode.env`, and writes
+`~/.config/opencode/opencode.json` declaring the `ollama-cloud` provider
+against `@ai-sdk/openai-compatible`. The configuration names the key through
+`{env:OLLAMA_API_KEY}` rather than carrying it, so T3 can start OpenCode
+sessions without a login of its own and nothing but the wrapper sees the value.
+Sessions default to `kimi-k2.7-code` with `gpt-oss:20b` for small jobs; change
+`private_harnesses_opencode_model` or the reviewed
+`private_harnesses_opencode_models` list to offer others. `opencode models`
+shows what is actually selectable, which includes catalog entries beyond the
+declared list. Nothing goes through `ai.dimalip.in`: this path talks to Ollama
+directly.
+
+OpenCode ships a launcher whose postinstall unpacks the platform binary, so its
+mise declaration carries `allow_builds = ["opencode-ai"]`. Without it the
+launcher installs and then refuses to run, and the version check fails the
+apply. An install that predates the permission needs
+`mise -C ~/.config/mise install --locked --force npm:opencode-ai` once.
 
 Orca is the [onorca.dev / stablyai app](https://www.onorca.dev/), running as
 `dima` in `orca.service`. Install its [Android companion](https://www.onorca.dev/docs/android-apk),
