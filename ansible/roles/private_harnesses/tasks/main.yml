@@ -451,6 +451,28 @@
     group: "{{ private_harnesses_group }}"
     mode: "0600"
 
+- name: Create the OpenCode credential directory
+  ansible.builtin.file:
+    path: "{{ private_harnesses_opencode_credentials | dirname }}"
+    state: directory
+    owner: "{{ private_harnesses_user }}"
+    group: "{{ private_harnesses_group }}"
+    mode: "0700"
+
+# The configuration above declares the provider; this says who it may talk as.
+# Keeping the key here rather than in the configuration also keeps it out of
+# the file OpenCode serves to any client over its own API.
+- name: Install the OpenCode provider credential
+  ansible.builtin.copy:
+    content: |
+      {{ {private_harnesses_opencode_provider: {"type": "api", "key": private_harnesses_secrets.ollama_api_key}} | to_nice_json }}
+    dest: "{{ private_harnesses_opencode_credentials }}"
+    owner: "{{ private_harnesses_user }}"
+    group: "{{ private_harnesses_group }}"
+    mode: "0600"
+  diff: false
+  no_log: true
+
 - name: Install mise-backed T3 Code and Orca commands
   ansible.builtin.template:
     src: mobile-app-wrapper.sh.j2

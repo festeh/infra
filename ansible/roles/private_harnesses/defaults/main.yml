@@ -51,6 +51,11 @@ private_harnesses_opencode_config_directory: >-
 private_harnesses_opencode_config: >-
   {{ private_harnesses_opencode_config_directory }}/opencode.json
 private_harnesses_opencode_provider: ollama-cloud
+# T3 Code spawns OpenCode with an environment of its own making, so the key
+# cannot travel in one. OpenCode's own credential store is read by every
+# process that starts it, whoever starts it.
+private_harnesses_opencode_credentials: >-
+  {{ private_harnesses_home }}/.local/share/opencode/auth.json
 private_harnesses_opencode_base_url: https://ollama.com/v1
 # What to offer out of the twenty models the Ollama Cloud subscription serves,
 # chosen by Artificial Analysis Intelligence Index (read 2026-09-19): every

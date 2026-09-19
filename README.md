@@ -248,9 +248,12 @@ at `https://ollama.com/v1`. The role installs `/usr/local/bin/opencode` as a
 wrapper that loads `OLLAMA_API_KEY` from the mode-`0600`
 `~/.config/private-harnesses/opencode.env`, and writes
 `~/.config/opencode/opencode.json` declaring the `ollama-cloud` provider
-against `@ai-sdk/openai-compatible`. The configuration names the key through
-`{env:OLLAMA_API_KEY}` rather than carrying it, so T3 can start OpenCode
-sessions without a login of its own and nothing but the wrapper sees the value.
+against `@ai-sdk/openai-compatible`. The key itself lives in OpenCode's own
+credential store, the mode-`0600` `~/.local/share/opencode/auth.json`, because
+T3 Code builds the environment of the OpenCode server it spawns and no
+variable of ours survives that; a credential in the store is read by whoever
+starts the binary. It stays out of `opencode.json` for a second reason: that
+file is served verbatim over OpenCode's own HTTP API.
 Which models are offered follows the Artificial Analysis Intelligence Index:
 the declared list is every model on that subscription scoring 30 or better,
 and sessions default to the top of it, GLM 5.3. Small jobs such as titling a
@@ -260,6 +263,12 @@ tokens a second and still scoring 40. Re-read the index and edit
 shows what is actually selectable, which includes catalog entries beyond the
 declared list. Nothing goes through `ai.dimalip.in`: this path talks to Ollama
 directly.
+
+T3 Code needs the provider enabled once, by hand, in its own client: Settings
+→ Providers → OpenCode → enable. Until then a thread refuses to send with
+"Enable a provider in Settings to send a message", and the model picker is
+empty. Enabled, it reports "2 upstream providers connected through OpenCode"
+and lists the Ollama Cloud models alongside OpenCode Zen's own.
 
 OpenCode ships a launcher whose postinstall unpacks the platform binary, so its
 mise declaration carries `allow_builds = ["opencode-ai"]`. Without it the

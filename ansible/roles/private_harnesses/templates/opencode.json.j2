@@ -5,8 +5,7 @@
       "npm": "@ai-sdk/openai-compatible",
       "name": "Ollama Cloud",
       "options": {
-        "baseURL": {{ private_harnesses_opencode_base_url | to_json }},
-        "apiKey": "{env:OLLAMA_API_KEY}"
+        "baseURL": {{ private_harnesses_opencode_base_url | to_json }}
       },
       "models": {
 {% for model, label in private_harnesses_opencode_models.items() %}
